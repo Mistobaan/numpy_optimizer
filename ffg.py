@@ -2,7 +2,7 @@ from staticfg import CFG, CFGBuilder, Block, Link
 import ast
 
 # Forward flow graph is an acyclic graph created from given control flow graph
-class FFG(object):
+class FFGBuilder(object):
 
     def __init__(self, cfg):
         # create acyclic graph from given control flow graph

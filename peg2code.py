@@ -1,211 +1,145 @@
-from peg import PEGNode, BinOpNode, CompareNode, BoolOpNode, BytesNode, NumericNode, ListNode
-from peg import LiteralNode, StringNode, DictNode, TupleNode, UnaryOpNode, SetNode, FunctionCall
-from peg import THETANode, PHINode, EvalNode, PassNode, Param, TemporaryNode
-from peg import PEG
+from peg_nodes import PEGNode, BinOpNode, CompareNode, BytesNode, NumericNode, ListNode
+from peg_nodes import LeafNode, StringNode, DictNode, TupleNode, UnaryOpNode, SetNode, FunctionCall, BoolOpNode
+from peg_nodes import THETANode, PHINode, EvalNode, PassNode, Param, TemporaryNode
+from peg_nodes import AttributeNode, SubscriptNode, SliceNode, ExtSliceNode, IndexNode
 import copy
 import ast
 import astor
 
+
+def replace_node(old_node, new_node):
+
+    for pred in old_node.predecessors:
+
+        indices = [i for i in range(len(pred.children)) if pred.children[i].id == old_node.id]
+
+        for i in indices:
+            pred.children[i] = new_node
+
+        new_node.predecessors.append(pred)
+
+    if old_node in new_node.predecessors:
+        new_node.predecessors.remove(old_node)
+
+
+def reset_predecessors(root, visited):
+
+    if root.id in visited:
+        return
+
+    visited.append(root.id)
+    root.predecessors = []
+
+    for child in root.children:
+        reset_predecessors(child, visited)
+
+
+def compute_predecessors(root):
+
+    visited = []
+    reset_predecessors(root, visited)
+    visited = []
+
+    compute_predecessors_helper(root, visited)
+
+
+def compute_predecessors_helper(root, visited):
+    if root.id in visited:
+        return
+
+    visited.append(root.id)
+
+    for child in root.children:
+        child.predecessors.append(root)
+        compute_predecessors_helper(child, visited)
+
+
+
 class StmtNode(PEGNode):
 
-    def __init__(self, _id, children_keys, children, stmt, output_vars):
+    def __init__(self, _id, children_keys, children, stmt, output_var):
         self.id = _id
         self.children_keys = children_keys
         self.children = children
         self.stmt = stmt
-        self.output_vars = output_vars
+        self.output_var = output_var
+
+
+
+class StmtLoopBodyCtx():
+
+    def __init__(self, body):
+        self.body = body
+        self.computed = False
+
+class StmtBranchesCtx():
+
+    def __init__(self, true_branch, false_branch):
+        self.true_branch = true_branch
+        self.false_branch = false_branch
+        self.computed = False
+
+
+def merge_dicts(d1, d2):
+
+    result = d1
+
+    for key in d2.keys():
+        if key not in result.keys():
+            result[key] = d2[key]
+
+
+    return result
 
 
 class LoopNode(PEGNode):
 
-    def __init__(self, _id, children_keys, children, body, output_vars, condition):
+    def __init__(self, _id, children_keys, children, body_ctx, output_var, condition):
         self.id = _id
         self.children_keys = children_keys
         self.children = children
-        self.body = body
-        self.output_vars = output_vars
+        self.body_ctx = body_ctx
+        self.output_var = output_var
         self.condition = condition
         self.additional_ids = []
         self.stmt = None
-        self.predecessor = None
+        self.predecessors = []
         self.stmt_ret = None
         self.stmt_cond = None
         self.break_condition = None
 
     def compute_stmt(self, stmt_iter):
+
         loop_stmt = self.stmt_cond + [ast.While(test=self.break_condition,
                                                 body=(stmt_iter + self.stmt_cond), orelse=[])] + self.stmt_ret
 
         return loop_stmt
 
 
-class BranchNode(PEG):
+class BranchNode(PEGNode):
 
-    def __init__(self, _id, children_keys, children, true_branch, false_branch, output_vars, condition):
+    def __init__(self, _id, children_keys, children, body_ctx, output_var, condition):
         self.id = _id
         self.children_keys = children_keys
         self.children = children
-        self.true_branch = true_branch
-        self.false_branch = false_branch
-        self.output_vars = output_vars
+        self.body_ctx = body_ctx
+        self.output_var = output_var
         self.condition = condition
         self.additional_ids = []
         self.true_stmt = None
         self.false_stmt = None
-        self.predecessor = None
+        self.predecessors = []
         self.stmt_cond = None
         self.predicate = None
 
     def compute_stmt(self, true_stmt, false_stmt):
+
         branch_stmt = self.stmt_cond + [ast.If(test=ast.Name(id=self.predicate, ctx=ast.Load()),
                                                body=true_stmt, orelse=false_stmt)]
 
         return branch_stmt
 
 
-def replace(var, name_bindings):
-    if isinstance(var, ast.Name) and var.id in name_bindings.keys():
-        return name_bindings[var.id]
-
-    return var
-
-
-def remove_occurences_of_updated_value(var, name_bindings):
-    keys_to_remove = []
-
-    for key in name_bindings.keys():
-        if contains_var(var, name_bindings[key]):
-            keys_to_remove.append(key)
-
-    for key in keys_to_remove:
-        del name_bindings[key]
-
-
-def contains_var(var, expr):
-
-
-    if isinstance(expr, ast.Name):
-        return expr.id == var
-
-    if isinstance(expr, ast.UnaryOp):
-        return contains_var(var, expr.operand)
-
-    if isinstance(expr, ast.BinOp):
-        return contains_var(var, expr.left) or contains_var(var, expr.right)
-
-    if isinstance(expr, ast.Call):
-        return any(map(lambda arg: contains_var(var, arg), expr.args))
-
-    if isinstance(expr, ast.Compare):
-        return contains_var(var, expr.left) or any(map(lambda e: contains_var(var, e), expr.comparators))
-
-    return False
-
-
-def forward_propagate(stmt, name_bindings):
-    if isinstance(stmt, ast.Return):
-        value = replace(stmt.value, name_bindings)
-        return ast.Return(value=value)
-
-    assert (isinstance(stmt, ast.Assign))
-
-    target = stmt.targets[0]
-    value = stmt.value
-
-    if isinstance(value, ast.BinOp):
-        left = replace(value.left, name_bindings)
-        right = replace(value.right, name_bindings)
-        value = ast.BinOp(left=left, op=value.op, right=right)
-
-    if isinstance(value, ast.Compare):
-        left = replace(value.left, name_bindings)
-        comparators = list(map(lambda c: replace(c, name_bindings), value.comparators))
-        value = ast.Compare(left=left, ops=value.ops, comparators=comparators)
-
-    elif isinstance(value, ast.UnaryOp):
-        operand = replace(value.operand, name_bindings)
-        value = ast.UnaryOp(op=value.op, operand=operand)
-
-    elif isinstance(value, ast.Name):
-        value = replace(value, name_bindings)
-
-    remove_occurences_of_updated_value(target.id, name_bindings)
-    name_bindings[target.id] = value
-
-    return ast.Assign(targets=[target], value=value)
-
-
-def basic_block_forward_propagation(sentence, name_bindings):
-    for i in range(len(sentence)):
-
-        if isinstance(sentence[i], ast.Assign) or isinstance(sentence[i], ast.Return):
-            new_stmt = forward_propagate(sentence[i], name_bindings)
-            sentence[i] = new_stmt
-
-        if isinstance(sentence[i], ast.While):
-            test = sentence[i].test
-            body = sentence[i].body
-
-            body_name_bindings = {}
-            basic_block_forward_propagation(body, body_name_bindings)
-
-            # new_test = replace(test.operand, body_name_bindings)
-            # sentence[i].test = new_test
-
-            name_bindings = {}
-
-        if isinstance(sentence[i], ast.If):
-            test = sentence[i].test
-
-            new_test = replace(test, name_bindings)
-            sentence[i].test = new_test
-
-            true_branch = sentence[i].body
-            false_branch = sentence[i].orelse
-
-            basic_block_forward_propagation(true_branch, {})
-            basic_block_forward_propagation(false_branch, {})
-
-            name_bindings = {}
-
-
-def sentence_rhs_expressions(sentence):
-    if len(sentence) == 0:
-        return []
-
-    if isinstance(sentence[0], ast.Assign) or isinstance(sentence[0], ast.Return):
-        value = sentence[0].value
-        return sentence_rhs_expressions(sentence[1:]) + [value]
-
-    if isinstance(sentence[0], ast.While):
-        test = sentence[0].test
-        return [test] + sentence_rhs_expressions(sentence[0].body) + sentence_rhs_expressions(sentence[1:])
-
-    if isinstance(sentence[0], ast.If):
-        test = sentence[0].test
-        return [test] + sentence_rhs_expressions(sentence[0].body) + \
-               sentence_rhs_expressions(sentence[0].orelse) + sentence_rhs_expressions(sentence[1:])
-
-
-def remove_useless_assignements(assignements_to_remove, sentence, rhs_expressions):
-    for stmt in sentence:
-
-        if isinstance(stmt, ast.Assign):
-
-            target = stmt.targets[0]
-
-            if not any(map(lambda expr: contains_var(target.id, expr), rhs_expressions)):
-                assignements_to_remove.append(stmt)
-
-        if isinstance(stmt, ast.While):
-            remove_useless_assignements([], stmt.body, rhs_expressions)
-
-        if isinstance(stmt, ast.If):
-            remove_useless_assignements([], stmt.body, rhs_expressions)
-            remove_useless_assignements([], stmt.orelse, rhs_expressions)
-
-    for assignement in assignements_to_remove:
-        sentence.remove(assignement)
 
 
 class CodeFromPEGGenerator(object):
@@ -227,9 +161,9 @@ class CodeFromPEGGenerator(object):
         ctx = {'retvar': self.peg.ctx['retvar']}
 
         sentence = self.translate_ctx(ctx, name_bindings)
-        basic_block_forward_propagation(sentence, {})
-        rhsides = sentence_rhs_expressions(sentence)
-        remove_useless_assignements([], sentence, rhsides)
+
+        name_bindings = {}
+        #basic_block_forward_propagation(sentence, name_bindings)
 
         code = ast.FunctionDef(name=name, args=args, body=sentence, decorator_list=[])
         return code
@@ -250,75 +184,53 @@ class CodeFromPEGGenerator(object):
         if fst_node in reachable_from_snd or snd_node in reachable_from_fst:
             return False
 
-        return fst_node.condition == snd_node.condition
+        return fst_node.condition.id == snd_node.condition.id
 
     def fuse_loops(self, fst_node, snd_node):
 
-        children_keys = []
-        children = []
 
-        all_children_keys = fst_node.children_keys + snd_node.children_keys
-        all_children = fst_node.children + snd_node.children
+        merged_body = merge_dicts(fst_node.body_ctx.body, snd_node.body_ctx.body)
 
-        for key, child in zip(all_children_keys, all_children):
-            if key not in children_keys:
-                children_keys.append(key)
-                children.append(child)
+        merged_children_keys = fst_node.children_keys
+        merged_children = fst_node.children
 
-        outputs = list(set(fst_node.output_vars + snd_node.output_vars))
+        for key, value in zip(snd_node.children_keys, snd_node.children):
+            if not key in merged_children_keys:
+                merged_children_keys.append(key)
+                merged_children.append(value)
 
-        body = fst_node.body
-        for key in snd_node.body.keys():
-            if key not in body.keys():
-                body[key] = snd_node.body[key]
-
-        fst_node.children_keys = children_keys
-        fst_node.children = children
-        fst_node.body = body
-        fst_node.additional_ids.append(snd_node.id)
-        fst_node.output_vars = outputs
+        fst_node.body_ctx.body = merged_body
+        snd_node.body_ctx = fst_node.body_ctx
+        fst_node.children_keys = merged_children_keys
+        snd_node.children_keys = merged_children_keys
+        fst_node.children = merged_children
+        snd_node.children = merged_children
         assert (fst_node.stmt_ret != None and snd_node.stmt_ret != None)
         fst_node.stmt_ret = fst_node.stmt_ret + snd_node.stmt_ret
 
-        snd_predecessor = snd_node.predecessor
-        if snd_predecessor != None:
-            snd_predecessor.children.remove(snd_node)
 
     def fuse_branches(self, fst_node, snd_node):
 
-        children_keys = []
-        children = []
 
-        all_children_keys = fst_node.children_keys + snd_node.children_keys
-        all_children = fst_node.children + snd_node.children
+        merged_true_branch = merge_dicts(fst_node.body_ctx.true_branch, snd_node.body_ctx.true_branch)
+        merged_false_branch = merge_dicts(fst_node.body_ctx.false_branch, snd_node.body_ctx.false_branch)
+        merged_children_keys = fst_node.children_keys
+        merged_children = fst_node.children
 
-        for key, child in zip(all_children_keys, all_children):
-            if key not in children_keys:
-                children_keys.append(key)
-                children.append(child)
+        for key, value in zip(snd_node.children_keys, snd_node.children):
+            if not key in merged_children_keys:
+                merged_children_keys.append(key)
+                merged_children.append(value)
 
-        outputs = list(set(fst_node.output_vars + snd_node.output_vars))
+        fst_node.body_ctx.true_branch = merged_true_branch
+        snd_node.body_ctx.false_branch = merged_false_branch
+        fst_node.children_keys = merged_children_keys
+        snd_node.children_keys = merged_children_keys
+        fst_node.children = merged_children
+        snd_node.children = merged_children
 
-        true_branch = fst_node.true_branch
-        for key in snd_node.true_branch.keys():
-            if key not in true_branch.keys():
-                true_branch[key] = snd_node.true_branch[key]
+        snd_node.body_ctx = fst_node.body_ctx
 
-        false_branch = fst_node.false_branch
-        for key in snd_node.false_branch.keys():
-            if key not in false_branch.keys():
-                false_branch[key] = snd_node.false_branch[key]
-
-        fst_node.children_keys = children_keys
-        fst_node.children = children
-        fst_node.true_branch = true_branch
-        fst_node.false_branch = false_branch
-        fst_node.additional_ids.append(snd_node.id)
-        fst_node.output_vars = outputs
-
-        snd_predecessor = snd_node.predecessor
-        if snd_predecessor != None:
-            snd_predecessor.children.remove(snd_node)
 
     def compute_loop_invariant_evals(self, ctx):
 
@@ -369,23 +281,26 @@ class CodeFromPEGGenerator(object):
         theta_nodes = []
         visited = []
 
+        assert(isinstance(node, EvalNode))
+        current_depth = node.loop_depth
+
         for child in node.children:
-            self.theta_nodes_reachable_from_helper(child, visited, theta_nodes)
+            self.theta_nodes_reachable_from_helper(child, visited, theta_nodes, current_depth)
 
         return theta_nodes
 
-    def theta_nodes_reachable_from_helper(self, node, visited, theta_nodes):
+    def theta_nodes_reachable_from_helper(self, node, visited, theta_nodes, current_depth):
 
-        if node.id in visited or isinstance(node, EvalNode):
+        if node.id in visited or (isinstance(node, EvalNode) and node.loop_depth == current_depth):
             return
 
         visited.append(node.id)
 
-        if isinstance(node, THETANode):
+        if isinstance(node, THETANode) and node.loop_depth == current_depth:
             theta_nodes.append(node)
 
         for child in node.children:
-            self.theta_nodes_reachable_from_helper(child, visited, theta_nodes)
+            self.theta_nodes_reachable_from_helper(child, visited, theta_nodes, current_depth)
 
     def compute_outermost_phi_nodes(self, ctx):
 
@@ -455,9 +370,11 @@ class CodeFromPEGGenerator(object):
                                                      root.children[i], visited)
 
             if root.children[i].id in evals:
-                eval_id = root.children[i].id
-                loopstmts[eval_id].predecessor = root
-                root.children[i] = loopstmts[eval_id]
+                eval_node = root.children[i]
+
+                replace_node(eval_node, loopstmts[eval_node.id])
+                evals.remove(eval_node.id)
+
 
     def replace_phis_with_branchstmts(self, phis, branchstmts, ctx):
 
@@ -472,6 +389,7 @@ class CodeFromPEGGenerator(object):
                 phi_id = ctx[key].id
                 ctx[key] = branchstmts[phi_id]
 
+
     def replace_phis_with_branchstmts_helper(self, phis, branchstmts, root, visited):
 
         if root.id in visited:
@@ -485,9 +403,11 @@ class CodeFromPEGGenerator(object):
                                                       root.children[i], visited)
 
             if root.children[i].id in phis:
-                phi_id = root.children[i].id
-                branchstmts[phi_id].predecessor = root
-                root.children[i] = branchstmts[phi_id]
+                phi_node = root.children[i]
+                replace_node(phi_node, branchstmts[phi_node.id])
+
+
+
 
     def create_modified_copy(self, root, S, vars_map):
 
@@ -521,7 +441,6 @@ class CodeFromPEGGenerator(object):
                 self.create_modified_copy_helper(node.children[i], visited, S_ids, vars_map)
 
     def find_fusable_nodes(self, stmt_nodes):
-
         for i in range(len(stmt_nodes)):
             for j in range(i + 1, len(stmt_nodes)):
                 if self.fusable(stmt_nodes[i], stmt_nodes[j]):
@@ -531,9 +450,12 @@ class CodeFromPEGGenerator(object):
 
     def translate_ctx(self, ctx, name_bindings):
 
-        loop_nodes = self.translate_loops(ctx, name_bindings)
+        tagged_theta_nodes = {}
+        loop_nodes = self.translate_loops(ctx, name_bindings, tagged_theta_nodes)
+
 
         branch_nodes = self.translate_branches(ctx, name_bindings)
+
 
         fusable_pair = self.find_fusable_nodes(loop_nodes)
         while fusable_pair != None:
@@ -555,10 +477,9 @@ class CodeFromPEGGenerator(object):
 
         return final_code
 
-    def translate_loops(self, ctx, name_bindings):
+    def translate_loops(self, ctx, name_bindings, tagged_theta_nodes):
 
         loop_invariant_evals = self.compute_loop_invariant_evals(ctx)
-        tagged_theta_nodes = {}
 
         if len(loop_invariant_evals) == 0:
             return []
@@ -569,6 +490,7 @@ class CodeFromPEGGenerator(object):
 
             S = self.theta_nodes_reachable_from(li_eval)
             S = sorted(S, key=lambda theta: theta.loop_depth)
+
             vars_map = {}
 
             for node in S:
@@ -589,7 +511,6 @@ class CodeFromPEGGenerator(object):
                 var = vars_map[node.id]
                 ctx_iter[var] = modified_iter_node
 
-            name_bindings_iter = dict.copy(name_bindings)
 
             # extracting loop break condition
             pass_node = li_eval.children[1]
@@ -606,7 +527,7 @@ class CodeFromPEGGenerator(object):
 
             ret_node = li_eval.children[0]
 
-            assert (isinstance(ret_node, THETANode) or isinstance(ret_node, Param) or isinstance(ret_node, NumericNode))
+            assert (isinstance(ret_node, THETANode) or isinstance(ret_node, LeafNode))
             modified_ret_node = self.create_modified_copy(ret_node, S, vars_map)
 
             name = ret_node.var_name if isinstance(ret_node, THETANode) else ret_node.name
@@ -623,8 +544,9 @@ class CodeFromPEGGenerator(object):
             stmt_node_children = list(map(lambda x: Param(x.id, vars_map[x.id]) if x in S else x,
                                           stmt_node_children))
 
+            loop_body_cxt = StmtLoopBodyCtx(ctx_iter)
             loop_stmt_node = LoopNode(li_eval.id, stmt_node_children_keys, stmt_node_children,
-                                      ctx_iter, [ret_var], cond_node)
+                                      loop_body_cxt, ret_var, cond_node)
             loop_stmt_node.stmt_cond = stmt_cond
             loop_stmt_node.stmt_ret = stmt_ret
             loop_stmt_node.break_condition = break_condition
@@ -634,7 +556,10 @@ class CodeFromPEGGenerator(object):
         evals = [e.id for e in loop_invariant_evals]
         self.replace_evals_with_loopstmts(evals, loopstmts, ctx)
 
-        return list(loopstmts.values())
+        lstmts = [lstmt for lstmt in loopstmts.values() if isinstance(lstmt, LoopNode)]
+
+        return lstmts + self.translate_loops(ctx, name_bindings, tagged_theta_nodes)
+
 
     def translate_branches(self, ctx, name_bindings):
 
@@ -660,12 +585,10 @@ class CodeFromPEGGenerator(object):
             modified_true_node = self.create_modified_copy(true_node, S, vars_map)
 
             ctx_true = {fresh_var: modified_true_node}
-            name_bindings_true = dict.copy(name_bindings)
 
             false_node = mn_phi.children[2]
             modified_false_node = self.create_modified_copy(false_node, S, vars_map)
             ctx_false = {fresh_var: modified_false_node}
-            name_bindings_false = dict.copy(name_bindings)
 
             cond_node = mn_phi.children[0]
             modified_cond_node = self.create_modified_copy(cond_node, S, vars_map)
@@ -677,8 +600,9 @@ class CodeFromPEGGenerator(object):
             stmt_node_children_keys = [vars_map[node.id] for node in S]
             stmt_node_children = [node for node in S]
 
+            branch_body_ctx = StmtBranchesCtx(ctx_true, ctx_false)
             branch_stmt_node = BranchNode(mn_phi.id, stmt_node_children_keys, stmt_node_children,
-                                          ctx_true, ctx_false, [fresh_var], cond_node)
+                                          branch_body_ctx, fresh_var, cond_node)
 
             branch_stmt_node.stmt_cond = stmt_cond
             branch_stmt_node.predicate = cond_var
@@ -702,23 +626,20 @@ class CodeFromPEGGenerator(object):
         for key in sorted_keys:
             tmp_node.children.append(ctx[key])
 
+        compute_predecessors(tmp_node)
+
         self.sequence_helper(tmp_node, sentence, name_bindings)
 
         for updated_child, key in zip(tmp_node.children, sorted_keys):
             ctx[key] = updated_child
 
             target = ast.Name(id=key, ctx=ast.Store())
-
-            if isinstance(ctx[key], Param):
-
-                value = ast.Name(id=ctx[key].name, ctx=ast.Load())
-
-            elif isinstance(ctx[key], NumericNode):
-
-                value = ctx[key].value
-
+            if isinstance(ctx[key], LoopNode) or isinstance(ctx[key], BranchNode):
+                value = ast.Name(id=ctx[key].output_var, ctx=ast.Load())
+                # extract body
             else:
-                print('strange', ctx[key])
+                assert(isinstance(ctx[key], LeafNode))
+                value = ctx[key].token
 
             if key == 'retvar':
                 sentence.append(ast.Return(value=value))
@@ -729,159 +650,320 @@ class CodeFromPEGGenerator(object):
 
     def sequence_helper(self, root, sentence, name_bindings):
 
+
         for i in range(len(root.children)):
+
             self.sequence_helper(root.children[i], sentence, name_bindings)
+
+
+            for child in root.children[i].children:
+                assert(isinstance(child, LeafNode))
 
             if isinstance(root.children[i], LoopNode):
 
                 loop_node = root.children[i]
 
-                for key, val in zip(loop_node.children_keys, loop_node.children):
+                if not loop_node.body_ctx.computed:
 
-                    target = ast.Name(id=key, ctx=ast.Store())
-
-                    assert (isinstance(val, Param) or isinstance(val, NumericNode))
-                    if isinstance(val, NumericNode):
+                    for key, val in zip(loop_node.children_keys, loop_node.children):
+                        target = ast.Name(id=key, ctx=ast.Store())
                         value = val.token
-                    else:
-                        value = ast.Name(id=val.name, ctx=ast.Load())
-                    init_assignement = ast.Assign(targets=[target], value=value)
-                    name_bindings[target] = value
-                    sentence.append(init_assignement)
 
-                iter_stmt = self.translate_ctx(loop_node.body, name_bindings)
-                loop_node_stmt = loop_node.compute_stmt(iter_stmt)
+                        init_assignement = ast.Assign(targets=[target], value=value)
+                        name_bindings[target] = value
+                        sentence.append(init_assignement)
 
-                for each in loop_node_stmt:
-                    sentence.append(each)
+                    iter_stmt = self.translate_ctx(loop_node.body_ctx.body, name_bindings)
+                    loop_node_stmt = loop_node.compute_stmt(iter_stmt)
+                    loop_node.body_ctx.computed = True
 
-                root.children[i] = Param(loop_node.id, loop_node.output_vars[0])
+                    for stmt in loop_node_stmt:
+                        sentence.append(stmt)
 
-                if len(loop_node.output_vars) > 1:
-                    for var, _id in zip(loop_node.output_vars[1:], loop_node.additional_ids):
-                        root.children.append(Param(_id, var))
-                    print(root, list(map(lambda x: x.name, root.children)))
+                param_node = Param(loop_node.id, loop_node.output_var)
+
+                replace_node(loop_node, param_node)
+
 
             if isinstance(root.children[i], BranchNode):
 
                 branch_node = root.children[i]
 
-                for key, val in zip(branch_node.children_keys, branch_node.children):
+                if not branch_node.body_ctx.computed:
 
-                    target = ast.Name(id=key, ctx=ast.Store())
-
-                    assert (isinstance(val, Param) or isinstance(val, NumericNode))
-                    if isinstance(val, NumericNode):
+                    for key, val in zip(branch_node.children_keys, branch_node.children):
+                        target = ast.Name(id=key, ctx=ast.Store())
                         value = val.token
-                    else:
-                        value = ast.Name(id=val.name, ctx=ast.Load())
 
-                    init_assignement = ast.Assign(targets=[target], value=value)
-                    name_bindings[target] = value
-                    sentence.append(init_assignement)
+                        init_assignement = ast.Assign(targets=[target], value=value)
+                        name_bindings[target] = value
+                        sentence.append(init_assignement)
 
-                true_stmt = self.translate_ctx(branch_node.true_branch, name_bindings)
-                false_stmt = self.translate_ctx(branch_node.false_branch, name_bindings)
-                branch_node_stmt = branch_node.compute_stmt(true_stmt, false_stmt)
+                    true_stmt = self.translate_ctx(branch_node.body_ctx.true_branch, name_bindings)
+                    false_stmt = self.translate_ctx(branch_node.body_ctx.false_branch, name_bindings)
+                    branch_node_stmt = branch_node.compute_stmt(true_stmt, false_stmt)
+                    branch_node.body_ctx.computed = True
 
-                for each in branch_node_stmt:
-                    sentence.append(each)
+                    for stmt in branch_node_stmt:
+                        sentence.append(stmt)
 
-                root.children[i] = Param(branch_node.id, branch_node.output_vars[0])
+                param_node = Param(branch_node.id, branch_node.output_var)
 
-                if len(branch_node.output_vars) > 1:
-                    for var, _id in zip(branch_node.output_vars[1:], branch_node.additional_ids):
-                        root.children.append(Param(_id, var))
+                replace_node(branch_node, param_node)
+
 
             if isinstance(root.children[i], BinOpNode):
 
                 operator = root.children[i]
 
-                for arg in operator.children:
-                    assert (isinstance(arg, Param) or isinstance(arg, NumericNode))
-
                 fresh_var = self.create_fresh_var('op')
                 target = ast.Name(id=fresh_var, ctx=ast.Store())
-                args = [ast.Name(id=param.name, ctx=ast.Load())
-                        if isinstance(param, Param)
-                        else param.token
-                        for param in operator.children]
-                op_expr = ast.BinOp(left=args[0], op=operator.op, right=args[1])
-                op_assignement = ast.Assign(targets=[target], value=op_expr)
-                name_bindings[target] = op_expr
+                args = [arg.token for arg in operator.children]
+                op_exp = ast.BinOp(left=args[0], op=operator.op, right=args[1])
+                op_assignement = ast.Assign(targets=[target], value=op_exp)
+                name_bindings[target] = op_exp
 
                 sentence.append(op_assignement)
-                root.children[i] = Param(operator.id, fresh_var)
+
+                param_node = Param(operator.id, fresh_var)
+                replace_node(operator, param_node)
+
 
             if isinstance(root.children[i], FunctionCall):
 
                 func_call = root.children[i]
 
-                for arg in func_call.children:
-                    assert (isinstance(arg, Param) or isinstance(arg, NumericNode))
-
-                fresh_var = self.create_fresh_var(func_call.name)
+                fresh_var = self.create_fresh_var('func_call')
                 target = ast.Name(id=fresh_var, ctx=ast.Store())
-                args = [ast.Name(id=param.name, ctx=ast.Load())
-                        if isinstance(param, Param)
-                        else param.token
-                        for param in func_call.children]
 
-                func_call_expr = ast.Call(func=ast.Name(id=func_call.name, ctx=ast.Load()), args=args, keywords=[])
-                func_assignement = ast.Assign(targets=[target], value=func_call_expr)
+                name = func_call.name().token
+                args = [arg.token for arg in func_call.args()]
+
+                func_call_exp = ast.Call(func=name, args=args, keywords=[])
+                func_assignement = ast.Assign(targets=[target], value=func_call_exp)
 
                 sentence.append(func_assignement)
-                root.children[i] = Param(func_call.id, fresh_var)
+                param_node = Param(func_call.id, fresh_var)
+
+                replace_node(func_call, param_node)
+
 
             if isinstance(root.children[i], CompareNode):
 
                 compare = root.children[i]
 
-                assert (isinstance(compare.head(), Param) or isinstance(compare.head(), NumericNode))
-
-                for arg in compare.tail():
-                    assert (isinstance(arg, Param) or isinstance(arg, NumericNode))
-
                 fresh_var = self.create_fresh_var('comp')
                 target = ast.Name(id=fresh_var, ctx=ast.Store())
-                if isinstance(compare.head(), Param):
-                    head = ast.Name(id=compare.head().name, ctx=ast.Load())
-                else:
-                    head = compare.head().token
-                tail = [ast.Name(id=param.name, ctx=ast.Load()) if isinstance(param, Param) else param.token
-                        for param in compare.tail()]
-                cmp_expr = ast.Compare(left=head, ops=compare.ops, comparators=tail)
-                cmp_assignement = ast.Assign(targets=[target], value=cmp_expr)
-                name_bindings[target] = cmp_expr
+                head = compare.head().token
+                tail = [arg.token for arg in compare.tail()]
+
+                cmp_exp = ast.Compare(left=head, ops=compare.ops, comparators=tail)
+                cmp_assignement = ast.Assign(targets=[target], value=cmp_exp)
+                name_bindings[target] = cmp_exp
 
                 sentence.append(cmp_assignement)
-                root.children[i] = Param(compare.id, fresh_var)
+                param_node = Param(compare.id, fresh_var)
+
+                replace_node(compare, param_node)
+
+
+            if isinstance(root.children[i], BoolOpNode):
+
+                bool_op_node = root.children[i]
+
+                fresh_var = self.create_fresh_var('bool_op')
+                target = ast.Name(id=fresh_var, ctx=ast.Store())
+                values = [arg.token for arg in bool_op_node.children]
+
+                bool_op_exp = ast.BoolOp(op=bool_op_node.op, values=values)
+                bool_op_assignement = ast.Assign(targets=[target], value=bool_op_exp)
+                name_bindings[target] = bool_op_exp
+
+                sentence.append(bool_op_assignement)
+
+                param_node = Param(bool_op_node.id, fresh_var)
+                replace_node(bool_op_node, param_node)
+
 
             if isinstance(root.children[i], UnaryOpNode):
 
-                unop_node = root.children[i]
+                un_op_node = root.children[i]
 
-                assert (isinstance(unop_node.operand(), Param) or isinstance(unop_node.operand(), NumericNode))
-                fresh_var = self.create_fresh_var('unary_op_expr')
+                fresh_var = self.create_fresh_var('unary_op_exp')
                 target = ast.Name(id=fresh_var, ctx=ast.Store())
-                if isinstance(unop_node.operand(), Param):
-                    operand = ast.Name(id=unop_node.operand().name, ctx=ast.Load())
-                else:
-                    operand = unop_node.operand().token
+                operand = un_op_node.operand().token
 
-                unop_expr = ast.UnaryOp(op=unop_node.op,
-                                        operand=operand)
-                unop_assignement = ast.Assign(targets=[target], value=unop_expr)
-                name_bindings[target] = unop_expr
-                sentence.append(unop_assignement)
-                root.children[i] = Param(unop_node.id, fresh_var)
+                un_op_exp = ast.UnaryOp(op=un_op_node.op, operand=operand)
+                un_op_assignement = ast.Assign(targets=[target], value=un_op_exp)
+                name_bindings[target] = un_op_exp
 
-            if isinstance(root.children[i], NumericNode):
-                pass
+                sentence.append(un_op_assignement)
+                param_node = Param(un_op_node.id, fresh_var)
+                replace_node(un_op_node, param_node)
 
-            if isinstance(root.children[i], Param):
-                pass
 
+            if isinstance(root.children[i], ListNode):
+
+                list_node = root.children[i]
+
+                fresh_var = self.create_fresh_var('list_exp')
+                target = ast.Name(id=fresh_var, ctx=ast.Store())
+                elts = [elem.token for elem in list_node.children]
+
+                list_exp = ast.List(elts=elts, ctx=ast.Load())
+                list_assignement = ast.Assign(targets=[target], value=list_exp)
+                name_bindings[target] = list_exp
+
+                sentence.append(list_assignement)
+                param_node = Param(list_node.id, fresh_var)
+
+                replace_node(list_node, param_node)
+
+
+            if isinstance(root.children[i], TupleNode):
+
+                tuple_node = root.children[i]
+
+                fresh_var = self.create_fresh_var('tuple_exp')
+                target = ast.Name(id=fresh_var, ctx=ast.Store())
+                elts = [elem.token for elem in tuple_node.children]
+
+                tuple_exp = ast.Tuple(elts=elts, ctx=ast.Load())
+                tuple_assignement = ast.Assign(targets=[target], value=tuple_exp)
+                name_bindings[target] = tuple_exp
+
+                sentence.append(tuple_assignement)
+                param_node = Param(tuple_node.id, fresh_var)
+
+                replace_node(tuple_node, param_node)
+
+
+            if isinstance(root.children[i], SetNode):
+
+                set_node = root.children[i]
+
+                fresh_var = self.create_fresh_var('set_exp')
+                target = ast.Name(id=fresh_var, ctx=ast.Store())
+                elts = [elem.token for elem in set_node.children]
+
+                set_exp = ast.Set(elts=elts, ctx=ast.Load())
+                set_assignement = ast.Assign(targets=[target], value=set_exp)
+                name_bindings[target] = set_exp
+
+                sentence.append(set_assignement)
+                param_node = Param(set_node.id, fresh_var)
+
+                replace_node(set_node, param_node)
+
+
+            if isinstance(root.children[i], DictNode):
+
+                dict_node = root.children[i]
+
+                fresh_var = self.create_fresh_var('dict_exp')
+                target = ast.Name(id=fresh_var, ctx=ast.Store())
+
+                keys = [k.token for k in dict_node.keys()]
+                values = [v.token for v in dict_node.values()]
+
+                dict_exp = ast.Dict(keys=keys, values=values, ctx=ast.Load())
+                dict_assignement = ast.Assign(targets=[target], value=dict_exp)
+                name_bindings[target] = dict_exp
+
+                sentence.append(dict_assignement)
+                param_node = Param(dict_node.id, fresh_var)
+
+                replace_node(dict_node, param_node)
+
+            if isinstance(root.children[i], AttributeNode):
+
+                attr_node = root.children[i]
+
+                fresh_var = self.create_fresh_var('attr_exp')
+                target = ast.Name(id=fresh_var, ctx=ast.Store())
+
+                value = attr_node.value().token
+                attr = attr_node.attr
+
+                attr_exp = ast.Attribute(value=value, attr=attr, ctx=ast.Load())
+                attr_assignement = ast.Assign(targets=[target], value=attr_exp)
+                name_bindings[target] = attr_exp
+
+                sentence.append(attr_assignement)
+                param_node = Param(attr_node.id, fresh_var)
+
+                replace_node(attr_node, param_node)
+
+            if isinstance(root.children[i], SubscriptNode):
+                subs_node = root.children[i]
+
+                fresh_var = self.create_fresh_var('subs_exp')
+                target = ast.Name(id=fresh_var, ctx=ast.Store())
+
+                value = subs_node.value().token
+                slice = subs_node.slice().token
+
+                subs_exp = ast.Subscript(value=value, slice=slice, ctx=ast.Load())
+                subs_assignement = ast.Assign(targets=[target], value=subs_exp)
+                name_bindings[target] = subs_exp
+
+                sentence.append(subs_assignement)
+                param_node = Param(subs_node.id, fresh_var)
+
+                replace_node(subs_node, param_node)
+
+            if isinstance(root.children[i], IndexNode):
+                idx_node = root.children[i]
+
+                fresh_var = self.create_fresh_var('idx_exp')
+                target = ast.Name(id=fresh_var, ctx=ast.Store())
+
+                value = idx_node.value().token
+
+                idx_exp = ast.Index(value=value)
+                idx_assignement = ast.Assign(targets=[target], value=idx_exp)
+                name_bindings[target] = idx_exp
+
+                sentence.append(idx_assignement)
+                param_node = Param(idx_node.id, fresh_var)
+
+                replace_node(idx_node, param_node)
+
+            if isinstance(root.children[i], SliceNode):
+                slice_node = root.children[i]
+
+                fresh_var = self.create_fresh_var('slice_exp')
+                target = ast.Name(id=fresh_var, ctx=ast.Store())
+
+                lower = slice_node.lower().token
+                upper = slice_node.upper().token
+                step = slice_node.step().token
+
+                slice_exp = ast.Slice(lower=lower, upper=upper, step=step)
+                slice_assignement = ast.Assign(targets=[target], value=slice_exp)
+                name_bindings[target] = slice_exp
+
+                sentence.append(slice_assignement)
+                param_node = Param(slice_node.id, fresh_var)
+
+                replace_node(slice_node, param_node)
+
+            if isinstance(root.children[i], ExtSliceNode):
+                eslice_node = root.children[i]
+
+                fresh_var = self.create_fresh_var('eslice_exp')
+                target = ast.Name(id=fresh_var, ctx=ast.Store())
+
+                dims = [d.token for d in eslice_node.dims()]
+
+                eslice_exp = ast.ExtSlice(dims=dims)
+                eslice_assignement = ast.Assign(targets=[target], value=eslice_exp)
+                name_bindings[target] = eslice_exp
+
+                sentence.append(eslice_assignement)
+                param_node = Param(eslice_node.id, fresh_var)
+
+                replace_node(eslice_node, param_node)
 
 
 

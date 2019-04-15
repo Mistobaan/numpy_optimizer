@@ -1,6 +1,6 @@
 import ast
 import astor
-from ffg import FFG
+from ffg import FFGBuilder
 from staticfg import CFGBuilder
 
 
@@ -299,7 +299,7 @@ def compute_apeg(filename):
 
     function_def = cfg.entryblock.statements[0]
     name = function_def.name
-    ffg = FFG(cfg.functioncfgs[name])
+    ffg = FFGBuilder(cfg.functioncfgs[name])
     apeg = APEG(ffg)
 
     return apeg, function_def

@@ -1,7 +1,7 @@
 from peg_nodes import PEGNode, BinOpNode, CompareNode, BytesNode, NumericNode, ListNode
 from peg_nodes import LeafNode, StringNode, DictNode, TupleNode, UnaryOpNode, SetNode, FunctionCall, BoolOpNode
 from peg_nodes import THETANode, PHINode, EvalNode, PassNode, Param, TemporaryNode
-from peg_nodes import AttributeNode, SubscriptNode, SliceNode, ExtSliceNode, IndexNode
+from peg_nodes import AttributeNode, SubscriptNode, SliceNode, ExtSliceNode, IndexNode, ComprehensionNode, ListCompNode
 import copy
 import ast
 import astor
@@ -965,5 +965,42 @@ class CodeFromPEGGenerator(object):
 
                 replace_node(eslice_node, param_node)
 
+
+            #if isinstance(root.children[i], ComprehensionNode):
+            #    comp_node = root.children[i]
+
+            #    fresh_var = self.create_fresh_var('compr_exp')
+            #    target = ast.Name(id=fresh_var, ctx=ast.Store())
+
+            #    t = comp_node.target().token
+            #    iter_obj = comp_node.iter_obj().token
+            #    ifs = [i.token for i in comp_node.ifs()]
+
+            #    comp_exp = ast.comprehension(target=t, iter=iter_obj, ifs=ifs)
+            #    comp_assignement = ast.Assign(targets=[target], value=comp_exp)
+            #    name_bindings[target] = comp_exp
+
+            #    sentence.append(comp_assignement)
+            #    param_node = Param(comp_node.id, fresh_var)
+
+            #    replace_node(comp_node, param_node)
+
+            #if isinstance(root.children[i], ListCompNode):
+            #    lcomp_node = root.children[i]
+
+            #    fresh_var = self.create_fresh_var('lcomp_exp')
+            #    target = ast.Name(id=fresh_var, ctx=ast.Store())
+
+            #    elt = lcomp_node.element().token
+            #    generators = [gen.token for gen in lcomp_node.generators()]
+
+            #    lcomp_exp = ast.ListComp(elt=elt, generators=generators)
+            #    lcomp_assignement = ast.Assign(targets=[target], value=lcomp_exp)
+            #    name_bindings[target] = lcomp_exp
+
+            #    sentence.append(lcomp_assignement)
+            #    param_node = Param(lcomp_node.id, fresh_var)
+
+            #    replace_node(lcomp_node, param_node)
 
 

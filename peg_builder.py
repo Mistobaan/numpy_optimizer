@@ -4,7 +4,7 @@ from abstract_peg import compute_apeg
 from peg_nodes import BinOpNode, CompareNode, BytesNode, NumericNode, ListNode, VariableNode, ComprehensionNode
 from peg_nodes import StringNode, DictNode, TupleNode, UnaryOpNode, SetNode, FunctionCall, BoolOpNode, GeneratorExpNode
 from peg_nodes import THETANode, PHINode, EvalNode, PassNode, Param, TemporaryNode, ListCompNode, SetCompNode
-from peg_nodes import AttributeNode, SubscriptNode, SliceNode, ExtSliceNode, IndexNode, LambdaNode
+from peg_nodes import AttributeNode, SubscriptNode, SliceNode, ExtSliceNode, IndexNode, LambdaNode, NameConstantNode
 import ast
 
 
@@ -437,9 +437,8 @@ class PEGBuilder(object):
 
             iter = self.TE(expression.iter, ctx)
             ifs = [self.TE(test, ctx) for test in expression.ifs]
-            ifs_list = ListNode(self.compute_id(), ifs)
 
-            node = ComprehensionNode(self.compute_id(), target, iter, ifs_list)
+            node = ComprehensionNode(self.compute_id(), target, iter, ifs)
 
             return node
 
@@ -651,7 +650,7 @@ def fill_graph_helper(root, g, visited):
             elif i == 1:
                 g.edge(str(root.id), str(root.children[i].id), label='iter_obj')
             else:
-                g.edge(str(root.id), str(root.children[i].id), label='ifs')
+                g.edge(str(root.id), str(root.children[i].id), label='if_' + str(i - 2))
 
 
         elif isinstance(root, ListCompNode) or isinstance(root, SetCompNode) or isinstance(root, GeneratorExpNode):
@@ -662,7 +661,7 @@ def fill_graph_helper(root, g, visited):
 
         elif isinstance(root, FunctionCall):
             if i == 0:
-                g.edge(str(root.id), str(root.children[i].id), label='f_name')
+                g.edge(str(root.id), str(root.children[i].id), label='func')
             else:
                 g.edge(str(root.id), str(root.children[i].id), label='arg_' + str(i-1))
 

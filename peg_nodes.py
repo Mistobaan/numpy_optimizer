@@ -300,8 +300,18 @@ class ComprehensionNode(PEGNode):
 
     def __init__(self, _id, target, iter, ifs):
         self.id = _id
-        self.children = [target, iter, ifs]
+        self.children = [target, iter] + ifs
         super().__init__()
+
+
+    def target(self):
+        return self.children[0]
+
+    def iter_obj(self):
+        return self.children[1]
+
+    def ifs(self):
+        return self.children[2:]
 
 
     def __str__(self):

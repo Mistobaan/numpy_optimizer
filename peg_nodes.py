@@ -3,61 +3,160 @@ import astor
 
 class PEGNode(object):
 
-    def __init__(self):
+    def __init__(self, _id):
+        self.id = _id
         self.predecessors = []
+        self.children = []
+        self.eq_class = 'class' + str(_id)
+        self.expr_type = 'unknown'
+        self.cost = 1
+        self.loop_variance_indices = set([])
+
+
+
+    def compute_expr_type(self):
+        return 'unknown'
+
+
+    def evaluable(self):
+        return False
+
+    def __str__(self):
+        return 'PEGNode'
+
+    def type_name(self):
+        return type(self).__name__ + '_'
+
+
+    def same(self, other):
+        return self == other
+
+    def is_constant_class(self):
+        return self.eq_class.find('class') < 0
 
 
 class LeafNode(PEGNode):
 
-    def __init__(self, token):
-        super().__init__()
-        self.children = []
+    def __init__(self, _id, token=None):
+        super().__init__(_id)
         self.token = token
+        self.expr_type = type(self).__name__
+        self.cost = 0
+
+    def type_name(self):
+        return super().type_name() + str(self)
+
+    def same(self, other):
+
+        if self.type_name() != other.type_name():
+            return False
+
+        if str(self) != str(other):
+            return False
+
+        if len(self.children) != len(other.children):
+            return False
+
+        return all([ch == oth_ch for (ch, oth_ch) in zip(self.children, other.children)])
 
 
 class Param(LeafNode):
 
-    def __init__(self, _id, name):
-        self.id = _id
+    def __init__(self, _id, name=None):
         self.name = name
         token = ast.Name(id=self.name, ctx=ast.Load())
-        super().__init__(token)
+        super().__init__(_id, token)
+        self.eq_class = 'param-' + self.name
 
     def __str__(self):
         return 'param_' + self.name
 
 
+    def type_name(self):
+        return type(self).__name__ + '_' + self.name
+
+
 class BinOpNode(PEGNode):
 
-    def __init__(self, _id, op, args):
-        super().__init__()
-        self.id = _id
+    def __init__(self, _id, op=None, args=[]):
+        super().__init__(_id)
         self.op = op
         self.children = args
+        self.expr_type = self.compute_expr_type()
+        self.cost = 1000 if any([isinstance(c, NPArrayNode) for c in self.children]) else 1
+
+    def left(self):
+        return self.children[0]
+
+    def right(self):
+        return self.children[1]
+
+    def compute_expr_type(self):
+        if len(self.children) == 0:
+            return 'unknown'
+        return 'NumNode' if all([arg.compute_expr_type() == 'NumNode' for arg in self.children]) else 'unknown'
 
     def __str__(self):
-        return astor.dump_tree(self.op)
+        return astor.dump_tree(self.op) if self.op != None else '?'
+
+    def type_name(self):
+        return super().type_name() + str(self)
+
+    def same(self, other):
+
+        if self.type_name() != other.type_name():
+            return False
+
+        if str(self) != str(other):
+            return False
+
+        if len(self.children) != len(other.children):
+            return False
+
+        return all([ch.same(oth_ch) for (ch, oth_ch) in zip(self.children, other.children)])
 
 
 class BoolOpNode(PEGNode):
 
-    def __init__(self, _id, op, args):
-        super().__init__()
-        self.id = _id
+    def __init__(self, _id, op=None, args=[]):
+        super().__init__(_id)
         self.op = op
         self.children = args
+        self.expr_type = 'NameConstantNode'
+
+    def left(self):
+        return self.children[0]
+
+    def right(self):
+        return self.children[1]
 
     def __str__(self):
-        return astor.dump_tree(self.op)
+        return astor.dump_tree(self.op) if self.op != None else '?'
+
+    def type_name(self):
+        return super().type_name() + str(self)
+
+    def same(self, other):
+
+        if self.type_name() != other.type_name():
+            return False
+
+        if str(self) != str(other):
+            return False
+
+        if len(self.children) != len(other.children):
+            return False
+
+        return all([ch.same(oth_ch) for (ch, oth_ch) in zip(self.children, other.children)])
 
 
 class CompareNode(PEGNode):
 
-    def __init__(self, _id, head, ops, tail):
-        super().__init__()
-        self.id = _id
+    def __init__(self, _id, ops, children=[]):
+        super().__init__(_id)
         self.ops = ops
-        self.children = [head] + tail
+        self.children = children
+        self.expr_type = 'NameConstantNode'
 
     def head(self):
         return self.children[0]
@@ -66,134 +165,253 @@ class CompareNode(PEGNode):
         return self.children[1:]
 
     def __str__(self):
-        return astor.dump_tree(self.ops[0])
+        return '_'.join([astor.dump_tree(op) for op in self.ops])
 
+    def type_name(self):
+        return super().type_name() + str(self)
 
+    def same(self, other):
 
+        if self.type_name() != other.type_name():
+            return False
+
+        if str(self) != str(other):
+            return False
+
+        if len(self.children) != len(other.children):
+            return False
+
+        return all([ch.same(oth_ch) for (ch, oth_ch) in zip(self.children, other.children)])
 
 
 class PHINode(PEGNode):
 
-    def __init__(self, _id, cond, t, f):
-        super().__init__()
-        self.id = _id
-        self.cond = cond
-        self.t = t
-        self.f = f
-        self.children = [self.cond, self.t, self.f]
+    def __init__(self, _id, children=[]):
+        super().__init__(_id)
+        self.children = children
+        self.expr_type = self.compute_expr_type()
+        self.cost = 10
+
+    def compute_expr_type(self):
+        if len(self.children) == 0:
+            return 'unknown'
+
+        if self.children[1].expr_type != self.children[2].expr_type:
+            return 'unknown'
+
+        return self.children[1].expr_type
+
+    def cond(self):
+        return self.children[0] if len(self.children) > 0 else None
+
+    def t(self):
+        return self.children[1] if len(self.children) > 0 else None
+
+    def f(self):
+        return self.children[2] if len(self.children) > 0 else None
 
     def __str__(self):
-        return 'PHI'
+        return 'PHI' + ' (' + str(self.cond().cost) + ')'
+
+    def same(self, other):
+
+        if self.type_name() != other.type_name():
+            return False
+
+        if str(self) != str(other):
+            return False
+
+        if len(self.children) != len(other.children):
+            return False
+
+        return all([ch.same(oth_ch) for (ch, oth_ch) in zip(self.children, other.children)])
 
 
 class VariableNode(LeafNode):
 
-    def __init__(self, _id, name):
-        self.id = _id
+    def __init__(self, _id, name=None):
         self.name = name
         token = ast.Name(id=self.name, ctx=ast.Load())
-        super().__init__(token)
-
+        super().__init__(_id, token)
 
     def __str__(self):
-        return self.name
+        return (self.name + '_var') if self.name != None else '?'
+
+    def type_name(self):
+        return type(self).__name__ + '_' + self.name
 
 
-class NumericNode(LeafNode):
+class IdentifierNode(LeafNode):
 
-    def __init__(self, _id, token):
-        self.id = _id
-        super().__init__(token)
+    def __init__(self, _id, name=None):
+        self.name = name
+        token = ast.Name(id=self.name, ctx=ast.Load())
+        super().__init__(_id, token)
+
+    def __str__(self):
+        return self.name if self.name != None else '?'
+
+    def type_name(self):
+        return super().type_name()
+
+
+class NumNode(LeafNode):
+
+    def __init__(self, _id, token=None):
+        super().__init__(_id, token)
+        self.eq_class = 'num-' + str(self)
+
+    def evaluable(self):
+        return True
 
     def value(self):
         return self.token.n
 
     def __str__(self):
-        return str(self.value())
+        return str(self.value()) if self.token != None else '?'
 
 
-class StringNode(LeafNode):
+class StrNode(LeafNode):
 
-    def __init__(self, _id, token):
-        self.id = _id
-        super().__init__(token)
+    def __init__(self, _id, token=None):
+        super().__init__(_id, token)
+        self.eq_class = 'str' + str(self)
+
+    def evaluable(self):
+        return True
 
     def value(self):
         return self.token.s
 
     def __str__(self):
-        return  '\'' + self.value() + '\''
+        return  '\'' + (self.value() if self.token != None else '?') + '\''
 
 
 class NameConstantNode(LeafNode):
 
-    def __init__(self, _id, token):
-        self.id = _id
-        super().__init__(token)
+    def __init__(self, _id, token=None):
+        super().__init__(_id, token)
+        self.eq_class = 'val' + str(self)
+
+    def evaluable(self):
+        return True
 
     def value(self):
         return self.token.value
 
     def __str__(self):
-        return str(self.value())
+        return str(self.value()) if self.token != None else '?'
 
 
 class BytesNode(LeafNode):
 
-    def __init__(self, _id, token):
-        self.id = _id
-        super().__init__(token)
+    def __init__(self, _id, token=None):
+        super().__init__(_id, token)
+        self.eq_class = 'bytes-' + str(self)
 
     def value(self):
         return self.token.s
 
     def __str__(self):
-        return str(self.value())
+        return str(self.value()) if self.token != None else '?'
 
 
 class ListNode(PEGNode):
 
-    def __init__(self, _id, children):
-        self.id = _id
+    def __init__(self, _id, children=[]):
+        super().__init__(_id)
         self.children = children
-        super().__init__()
+        self.expr_type = self.compute_expr_type()
 
+    def compute_expr_type(self):
+
+        return 'ListNode'
 
     def __str__(self):
         return 'List'
 
+    def same(self, other):
+
+        if self.type_name() != other.type_name():
+            return False
+
+        if str(self) != str(other):
+            return False
+
+        if len(self.children) != len(other.children):
+            return False
+
+        return all([ch.same(oth_ch) for (ch, oth_ch) in zip(self.children, other.children)])
+
 
 class SetNode(PEGNode):
 
-    def __init__(self, _id, children):
-        self.id = _id
+    def __init__(self, _id, children=[]):
+        super().__init__(_id)
         self.children = children
-        super().__init__()
+        self.expr_type = self.compute_expr_type()
+
+    def compute_expr_type(self):
+        if len(self.children) == 0:
+            return 'unknown'
+
+        return 'SetNode[' + self.children[0].expr_type + ']'
 
 
     def __str__(self):
         return 'Set'
 
+    def same(self, other):
+
+        if self.type_name() != other.type_name():
+            return False
+
+        if str(self) != str(other):
+            return False
+
+        if len(self.children) != len(other.children):
+            return False
+
+        return all([ch.same(oth_ch) for (ch, oth_ch) in zip(self.children, other.children)])
+
 
 class TupleNode(PEGNode):
 
-    def __init__(self, _id, children):
-        self.id = _id
+    def __init__(self, _id, children=[]):
+        super().__init__(_id)
         self.children = children
-        super().__init__()
-
+        self.expr_type = 'unknown'
 
     def __str__(self):
         return 'Tuple'
 
+    def same(self, other):
+
+        if self.type_name() != other.type_name():
+            return False
+
+        if str(self) != str(other):
+            return False
+
+        if len(self.children) != len(other.children):
+            return False
+
+        return all([ch.same(oth_ch) for (ch, oth_ch) in zip(self.children, other.children)])
+
 
 class DictNode(PEGNode):
 
-    def __init__(self, _id, keys, values):
-        self.id = _id
-        self.children = keys + values
-        super().__init__()
+    def __init__(self, _id, children=[]):
+        super().__init__(_id)
+        self.children = children
+        self.expr_type = self.compute_expr_type()
 
+    def compute_expr_type(self):
+
+        if len(self.children) == 0:
+            return 'unknown'
+
+        return 'Dict[' + self.keys()[0].expr_type + ', ' + self.values()[0].expr_type() + ']'
 
     def n(self):
         return len(self.children)
@@ -207,31 +425,56 @@ class DictNode(PEGNode):
     def __str__(self):
         return 'Dict'
 
+    def same(self, other):
+
+        if self.type_name() != other.type_name():
+            return False
+
+        if str(self) != str(other):
+            return False
+
+        if len(self.children) != len(other.children):
+            return False
+
+        return all([ch.same(oth_ch) for (ch, oth_ch) in zip(self.children, other.children)])
+
 
 class AttributeNode(PEGNode):
 
-    def __init__(self, _id, value, attr):
-        self.id = _id
+    def __init__(self, _id, attr, value_child):
+        super().__init__(_id)
         self.attr = attr
-        self.children = [value]
-        super().__init__()
-
+        self.children = value_child
+        self.cost = 3
 
     def value(self):
         return self.children[0]
 
-
     def __str__(self):
-        return self.attr + '_attr'
+        return (self.attr + '_attr') if self.attr != None else '?'
+
+    def type_name(self):
+        return super().type_name() + self.attr
+
+    def same(self, other):
+
+        if self.type_name() != other.type_name():
+            return False
+
+        if str(self) != str(other):
+            return False
+
+        if len(self.children) != len(other.children):
+            return False
+
+        return all([ch.same(oth_ch) for (ch, oth_ch) in zip(self.children, other.children)])
 
 
 class SubscriptNode(PEGNode):
 
-    def __init__(self, _id, value, slice):
-        self.id = _id
-        self.children = [value, slice]
-        super().__init__()
-
+    def __init__(self, _id, children=[]):
+        super().__init__(_id)
+        self.children = children
 
     def value(self):
         return self.children[0]
@@ -245,10 +488,9 @@ class SubscriptNode(PEGNode):
 
 class SliceNode(PEGNode):
 
-    def __init__(self, _id, lower, upper, step):
-        self.id = _id
-        self.children = [lower, upper, step]
-        super().__init__()
+    def __init__(self, _id, children=[]):
+        super().__init__(_id)
+        self.children = children
 
     def lower(self):
         return self.children[0]
@@ -259,22 +501,18 @@ class SliceNode(PEGNode):
     def step(self):
         return self.children[2]
 
-
     def __str__(self):
         return 'Slice'
 
 
 class IndexNode(PEGNode):
 
-    def __init__(self, _id, value):
-        self.id = _id
-        self.children = [value]
-        super().__init__()
-
+    def __init__(self, _id, value_child):
+        super().__init__(_id)
+        self.children = value_child
 
     def value(self):
         return self.children[0]
-
 
     def __str__(self):
         return 'Index'
@@ -283,26 +521,21 @@ class IndexNode(PEGNode):
 class ExtSliceNode(PEGNode):
 
     def __init__(self, _id, dims):
-        self.id = _id
+        super().__init__(_id)
         self.children = dims
-        super().__init__()
 
     def dims(self):
         return self.children
-
 
     def __str__(self):
         return 'ExtSlice'
 
 
-
 class ComprehensionNode(PEGNode):
 
-    def __init__(self, _id, target, iter, ifs):
-        self.id = _id
-        self.children = [target, iter] + ifs
-        super().__init__()
-
+    def __init__(self, _id, children=[]):
+        super().__init__(_id)
+        self.children = children
 
     def target(self):
         return self.children[0]
@@ -313,6 +546,21 @@ class ComprehensionNode(PEGNode):
     def ifs(self):
         return self.children[2:]
 
+    def same(self, other):
+
+        if self.type_name() != other.type_name():
+            return False
+
+        if str(self) != str(other):
+                return False
+
+        if len(self.children) != len(other.children):
+                return False
+
+        res = all([ch.same(oth_ch) for (ch, oth_ch) in zip(self.children, other.children)])
+
+        return res
+
 
     def __str__(self):
         return 'Comprehension'
@@ -320,10 +568,9 @@ class ComprehensionNode(PEGNode):
 
 class ListCompNode(PEGNode):
 
-    def __init__(self, _id, element, generators):
-        self.id = _id
-        self.children = [element] + generators
-        super().__init__()
+    def __init__(self, _id, children=[]):
+        super().__init__(_id)
+        self.children = children
 
     def element(self):
         return self.children[0]
@@ -331,16 +578,31 @@ class ListCompNode(PEGNode):
     def generators(self):
         return self.children[1:]
 
+    def same(self, other):
+
+        if self.type_name() != other.type_name():
+            return False
+
+        if str(self) != str(other):
+                return False
+
+        if len(self.children) != len(other.children):
+                return False
+
+        res = all([ch.same(oth_ch) for (ch, oth_ch) in zip(self.children, other.children)])
+
+        return res
+
+
     def __str__(self):
         return 'List Compr'
 
 
 class SetCompNode(PEGNode):
 
-    def __init__(self, _id, element, generators):
-        self.id = _id
-        self.children = [element] + generators
-        super().__init__()
+    def __init__(self, _id, children=[]):
+        super().__init__(_id)
+        self.children = children
 
     def element(self):
         return self.children[0]
@@ -351,12 +613,12 @@ class SetCompNode(PEGNode):
     def __str__(self):
         return 'Set Compr'
 
+
 class GeneratorExpNode(PEGNode):
 
-    def __init__(self, _id, element, generators):
-        self.id = _id
-        self.children = [element] + generators
-        super().__init__()
+    def __init__(self, _id, children=[]):
+        super().__init__(_id)
+        self.children = children
 
     def element(self):
         return self.children[0]
@@ -370,10 +632,9 @@ class GeneratorExpNode(PEGNode):
 
 class DictCompNode(PEGNode):
 
-    def __init__(self, _id, key, value, generators):
-        self.id = _id
-        self.children = [key, value] + generators
-        super().__init__()
+    def __init__(self, _id, children=[]):
+        super().__init__(_id)
+        self.children = children
 
     def key(self):
         return self.children[0]
@@ -388,31 +649,38 @@ class DictCompNode(PEGNode):
         return 'Dict Compr'
 
 
-
 class THETANode(PEGNode):
 
-    def __init__(self, _id, base, step, loop_depth, var_name):
-        self.id = _id
-        self.base = base
-        self.step = step
-        self.children = [self.base, self.step]
-        self.loop_depth = loop_depth
-        self.var_name = var_name
-        super().__init__()
+    def __init__(self, _id, children=[], loop_depth=None, var_name=None):
+        super().__init__(_id)
+        self.children = children
+        self.loop_depth = loop_depth if loop_depth != None else ('?loop-d-' + str(_id))
+        self.var_name = var_name if var_name != None else ('$?arg_' + str(_id))
+        self.expr_type = self.compute_expr_type()
+        self.cost = 10
+
+    def compute_expr_type(self):
+        if len(self.children) == 0:
+            return 'unknown'
+        return 'NumNode' if all([arg.expr_type == 'NumNode' for arg in self.children]) else 'unknown'
+
+    def type_name(self):
+        return type(self).__name__ + '_' + self.var_name
 
     def __str__(self):
+        if self.loop_depth == None or self.var_name == None:
+            return 'THETA_?'
         return 'THETA_' + str(self.loop_depth) + ' (' + self.var_name + ')'
 
 
 class EvalNode(PEGNode):
 
-    def __init__(self, _id, loop_variant_node, idx_node, loop_depth):
-        self.id = _id
-        self.loop_variant_node = loop_variant_node
-        self.idx_node = idx_node
-        self.children = [self.loop_variant_node, self.idx_node]
+    def __init__(self, _id, children=[], loop_depth=None):
+        super().__init__(_id)
+        self.children = children
         self.loop_depth = loop_depth
-        super().__init__()
+        self.expr_type = children[0].expr_type if len(children) > 0 else 'unknown'
+        self.cost = 10
 
     def __str__(self):
         return 'EVAL_' + str(self.loop_depth)
@@ -420,23 +688,36 @@ class EvalNode(PEGNode):
 
 class PassNode(PEGNode):
 
-    def __init__(self, _id, condition_node):
-        self.id = _id
-        self.condition_node = condition_node
-        self.children = [self.condition_node]
-        super().__init__()
+    def __init__(self, _id, children=[], loop_depth=None):
+        super().__init__(_id)
+        self.children = children
+        self.expr_type = 'unknown'
+        self.loop_depth = loop_depth
 
     def __str__(self):
         return 'PASS'
 
+    def same(self, other):
+
+        if self.type_name() != other.type_name():
+            return False
+
+        if str(self) != str(other):
+            return False
+
+        if len(self.children) != len(other.children):
+            return False
+
+        return all([ch.same(oth_ch) for (ch, oth_ch) in zip(self.children, other.children)])
+
 
 class UnaryOpNode(PEGNode):
 
-    def __init__(self, _id, op, operand):
-        self.id = _id
+    def __init__(self, _id, op, children=[]):
+        super().__init__(_id)
         self.op = op
-        self.children = [operand]
-        super().__init__()
+        self.children = children
+        self.expr_type = self.operand().expr_type if self.children != [] else 'unknown'
 
     def operand(self):
         return self.children[0]
@@ -444,14 +725,29 @@ class UnaryOpNode(PEGNode):
     def __str__(self):
         return astor.dump_tree(self.op)
 
+    def type_name(self):
+        return super().type_name() + str(self)
+
+    def same(self, other):
+
+        if self.type_name() != other.type_name():
+            return False
+
+        if str(self) != str(other):
+            return False
+
+        if len(self.children) != len(other.children):
+            return False
+
+        return all([ch.same(oth_ch) for (ch, oth_ch) in zip(self.children, other.children)])
+
 
 class TemporaryNode(PEGNode):
 
     def __init__(self, _id, name):
-        self.id = _id
+        super().__init__(_id)
         self.name = name
         self.children = []
-        super().__init__()
 
     def __str__(self):
         return 'tmp_' + self.name
@@ -459,11 +755,10 @@ class TemporaryNode(PEGNode):
 
 class FunctionCall(PEGNode):
 
-    def __init__(self, _id, name, args):
-        self.id = _id
-        self.children = [name] + args
-        super().__init__()
-
+    def __init__(self, _id, children=[]):
+        super().__init__(_id)
+        self.children = children
+        self.cost = 15
 
     def name(self):
         return self.children[0]
@@ -474,13 +769,26 @@ class FunctionCall(PEGNode):
     def __str__(self):
         return 'Function Call'
 
+    def same(self, other):
+
+        if self.type_name() != other.type_name():
+            return False
+
+        if str(self) != str(other):
+            return False
+
+        if len(self.children) != len(other.children):
+            return False
+
+        return all([ch.same(oth_ch) for (ch, oth_ch) in zip(self.children, other.children)])
+
 
 class LambdaNode(PEGNode):
 
-    def __init__(self, _id, args, body):
-        super().__init__()
-        self.id = _id
-        self.children = args + [body]
+    def __init__(self, _id, children=[]):
+        super().__init__(_id)
+        self.children = children
+        self.expr_type = self.body().expr_type
 
     def args(self):
         return self.children[:-1]
@@ -490,4 +798,112 @@ class LambdaNode(PEGNode):
 
     def __str__(self):
         return 'Lambda'
+
+    def same(self, other):
+
+        if self.type_name() != other.type_name():
+            return False
+
+        if str(self) != str(other):
+            return False
+
+        if len(self.children) != len(other.children):
+            return False
+
+        return all([ch.same(oth_ch) for (ch, oth_ch) in zip(self.children, other.children)])
+
+
+class NPArrayNode(PEGNode):
+
+    def __init__(self, _id, children=[]):
+        super().__init__(_id)
+        self.children = children
+        self.expr_type = 'NPArrayNode'
+        self.shape = compute_shape(self) if len(children) > 0 else None
+
+    def same(self, other):
+
+        if self.type_name() != other.type_name():
+            return False
+
+        if str(self) != str(other):
+            return False
+
+        if len(self.children) != len(other.children):
+            return False
+
+        res = all([ch.same(oth_ch) for (ch, oth_ch) in zip(self.children, other.children)])
+
+        return res
+
+    def __str__(self):
+        return 'NPArray'
+
+
+class SetSubscriptNode(PEGNode):
+
+    def __init__(self, _id, children=[]):
+        super().__init__(_id)
+        self.children = children
+        self.expr_type = 'unknown'
+
+    def same(self, other):
+
+        if self.type_name() != other.type_name():
+            return False
+
+        if str(self) != str(other):
+                return False
+
+        if len(self.children) != len(other.children):
+                return False
+
+        res = all([ch.same(oth_ch) for (ch, oth_ch) in zip(self.children, other.children)])
+
+        return res
+
+    def target(self):
+        return self.children[0]
+
+    def slice(self):
+        return self.children[1]
+
+    def value(self):
+        return self.children[2]
+
+    def __str__(self):
+        return 'SetSubscrip'
+
+
+# computes shape of given arr node, if shape is unknown returns None
+def compute_shape(arr_node):
+
+    assert(isinstance(arr_node, NPArrayNode))
+
+    shape = []
+    visited = []
+
+    compute_shape_helper(arr_node.children[0], [], shape, visited)
+
+
+    return tuple(shape) if shape != [] else None
+
+
+def compute_shape_helper(node, current_shape, shape, visited):
+
+    if node.id in visited or shape != []:
+        return
+
+    visited.append(node.id)
+
+    current_shape = current_shape + [len(node.children)]
+
+    for child in node.children:
+        compute_shape_helper(child, current_shape, shape, visited)
+
+
+    if isinstance(node, ListNode) and any([child.expr_type == 'NumNode' for child in node.children]):
+
+        for dim in current_shape:
+            shape.append(dim)
 

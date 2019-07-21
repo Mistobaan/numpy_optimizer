@@ -61,7 +61,7 @@ class Condition_APEGNode(APEGNode):
 
     def __str__(self):
         return 'Cond_Node' + str(self.id) + '\n' + (astor.to_source(self.boolean_expression())
-                                                    if self.boolean_expression() != None
+                                                    if self.boolean_expression() is None
                                                     else 'no_expression')
 
 
@@ -111,10 +111,59 @@ class APEG(object):
 
         self.apeg_root = self.transform_to_APEG()
 
+        nodes = self.nodes_reachable_from(self.apeg_root, [])
+
+        for node in nodes:
+            if isinstance(node, Eval_APEGNode):
+
+                val = node.children[0]
+
+                if isinstance(val.statements[0], ast.For):
+
+                    theta_node = val.children[0]
+                    init_node = theta_node.children[0]
+                    iter_node = theta_node.children[1]
+
+                    init_stmt, iter_stmt = self.extract_forloop_init_and_iter_stmt(val.statements[0])
+
+                    if isinstance(init_node, APEGNode) and not self.is_loop_header(init_node):
+                        init_node.statements = [init_stmt] + init_node.statements
+                    else:
+                        new_node = APEGNode(self.compute_id(), children=[init_node], statements=[init_stmt])
+                        theta_node.children[0] = new_node
+                        self.nodes_map[self.current_id] = new_node
+
+                    if isinstance(iter_node, APEGNode) and not self.is_loop_header(iter_node):
+                        iter_node.statements.append(iter_stmt)
+                    else:
+                        new_node = APEGNode(self.compute_id(), children=[iter_node], statements=[iter_stmt])
+                        theta_node.children[1] = new_node
+                        self.nodes_map[self.current_id] = new_node
+
     def compute_id(self):
 
         self.current_id += 1
         return self.current_id
+
+    def nodes_reachable_from(self, node, visited):
+
+        successors = []
+        self.nodes_reachable_from_helper(node, visited, successors)
+
+        return successors
+
+    def nodes_reachable_from_helper(self, node, visited, successors):
+
+        if node in visited:
+            return
+
+        visited.append(node)
+        successors.append(node)
+
+        for child in node.children:
+            if child != None:
+                self.nodes_reachable_from_helper(child, visited, successors)
+
 
     def transform_to_APEG(self):
 
@@ -131,7 +180,6 @@ class APEG(object):
             if len(node.exits) > 0:
 
                 condition = node.exits[0].exitcase
-
                 self.conditions_map[self.current_id] = Condition_APEGNode(self.current_id, [], [condition])
 
                 if isinstance(node.statements[-1], ast.If):
@@ -154,7 +202,7 @@ class APEG(object):
             if node_input != None:
                 apeg_node.children.append(node_input)
 
-        root_id = self.ffg_to_apeg_node_id[self.ffg.ffg.finalblocks[0].id]
+        root_id = self.ffg_to_apeg_node_id[self.ffg.final_block.id]
         root = self.nodes_map[root_id]
 
         return root
@@ -179,7 +227,6 @@ class APEG(object):
             copy_node = self.ffg.nodes_map[id_of_copy]
 
             iteration_node = self.compute_inputs(copy_node)
-
             theta = THETA_APEGNode(self.compute_id(), children=[result, iteration_node])
 
             result = theta
@@ -214,9 +261,7 @@ class APEG(object):
                 edges_reachable_from_d.remove(d_edge)
                 return self.decide(d_edge, edges_reachable_from_d, value_fn, loop_set, node)
 
-                return self.nodes_map[self.ffg_to_apeg_node_id[true_edge.source.id]]
-
-                # in other case, d's last statement is a branch
+            # in other case, d's last statement is a branch
             true_edge = d.exits[0]
             false_edge = d.exits[1]
 
@@ -278,7 +323,7 @@ class APEG(object):
 
         return result
 
-    # this should be corrected for break and continue statements
+
     def simplify(self, phi_node):
 
         if not (isinstance(phi_node, PHI_APEGNode)):
@@ -294,12 +339,61 @@ class APEG(object):
         return result
 
 
-def compute_apeg(filename):
-    cfg = CFGBuilder().build_from_file(filename, filename)
+    def compute_loop_condition(self, loop_header_stmt):
 
+        assert (isinstance(loop_header_stmt, ast.For) or isinstance(loop_header_stmt, ast.While))
+
+        if isinstance(loop_header_stmt, ast.While):
+            return loop_header_stmt.test
+
+        if isinstance(loop_header_stmt, ast.For):
+            iterator = loop_header_stmt.iter
+            var = loop_header_stmt.target
+            return ast.Compare(left=var, ops=[ast.In()], comparators=[iterator])
+
+
+    def extract_forloop_init_and_iter_stmt(self, forloop_stmt):
+
+        assert (isinstance(forloop_stmt, ast.For))
+
+        loop_var = forloop_stmt.target
+        iterator = forloop_stmt.iter
+
+        iter_call = ast.Call(func=ast.Name(id='iter', ctx=ast.Load()), args=[iterator], keywords=[])
+        next_iter_call = ast.Call(func=ast.Name(id='next', ctx=ast.Load()), args=[iter_call], keywords=[])
+        loop_var_assign = ast.Assign(targets=[loop_var], value=next_iter_call)
+
+        astor.to_source(loop_var_assign)
+
+        next_expression = ast.Call(func=ast.Name(id='next', ctx=ast.Load()), args=[loop_var], keywords=[])
+        next_stmt = ast.Assign(targets=[loop_var], value=next_expression)
+
+        return loop_var_assign, next_stmt
+
+    def is_loop_header(self, node):
+
+        if len(node.statements) == 0:
+            return False
+
+        if isinstance(node.statements[0], ast.For) or isinstance(node.statements[0], ast.While):
+            return True
+
+        return False
+
+
+def compute_apeg_from_source(src, name):
+
+    cfg = CFGBuilder().build_from_src(name=name, src=src)
     function_def = cfg.entryblock.statements[0]
-    name = function_def.name
-    ffg = FFGBuilder(cfg.functioncfgs[name])
+
+    if isinstance(function_def, ast.FunctionDef):
+        name = function_def.name
+        ffg = FFGBuilder(cfg.functioncfgs[name])
+
+    else:
+        ffg = FFGBuilder(cfg)
+        function_def = None
+
     apeg = APEG(ffg)
 
     return apeg, function_def

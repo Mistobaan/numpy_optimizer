@@ -1,8 +1,9 @@
-from staticfg import CFG, CFGBuilder, Block, Link
+from staticfg import Block, Link
 import ast
 
 # Forward flow graph is an acyclic graph created from given control flow graph
 class FFGBuilder(object):
+
 
     def __init__(self, cfg):
         # create acyclic graph from given control flow graph
@@ -23,25 +24,14 @@ class FFGBuilder(object):
             self.zero_block.statements.append(pass_stmt)
             self.nodes_map[self.zero_block.id] = self.zero_block
 
-        assert (len(self.ffg.finalblocks) != 0)
-
-        # multiple return statements case - does not work properly, should be corrected
         if len(self.ffg.finalblocks) > 1:
-            fb = Block(max(self.nodes_map.keys()) + 1)
-            pass_stmt = ast.Pass()
-            pass_stmt.lineno = max([statement.lineno for block in self.ffg.finalblocks
-                                    for statement in block.statements])
-            fb.statements.append(pass_stmt)
-            self.final_block = fb
-            self.nodes_map[fb.id] = fb
+            raise Exception('Current version does not support multiple return statements')
 
-            for block in self.ffg.finalblocks:
-                link = Link(block, fb)
-                block.exits.append(link)
-                fb.predecessors.append(link)
+        elif len(self.ffg.finalblocks) == 1:
+            self.final_block = self.ffg.finalblocks[0]
 
         else:
-            self.final_block = self.ffg.finalblocks[0]
+            self.final_block = self.ffg.entryblock
 
     # method for forward flow graph initialization
     def transform_to_FFG(self, cfg):
@@ -96,7 +86,6 @@ class FFGBuilder(object):
 
         # defined for loop headers only
         assert (self.is_loop_header(self.nodes_map[original_id]))
-
         return -original_id - 1
 
     def get_id_of_original_from_copy(self, copy_id):
@@ -105,7 +94,6 @@ class FFGBuilder(object):
 
         # defined for loop header copies only
         assert (self.is_loop_header(self.nodes_map[original_id]))
-
         return original_id
 
     @staticmethod
@@ -123,7 +111,7 @@ class FFGBuilder(object):
         source_lineno = edge.source.at()
         target_lineno = edge.target.at()
 
-        if source_lineno == None:
+        if source_lineno is None:
             return False
 
         return target_lineno <= source_lineno
@@ -199,7 +187,7 @@ class FFGBuilder(object):
 
         edges_list = self.edges_reachable_from(source_edge)
 
-        if target_node == None:
+        if target_node is None:
             return edges_list
 
         result = [e for e in edges_list if target_node.id in self.nodes_reachable_from(e.target).keys()]
@@ -261,9 +249,7 @@ class FFGBuilder(object):
 
         edges_reachable_from_source = self.edges_reachable_from(source_edge)
 
-        is_reachable_from_source = lambda edge: edge in edges_reachable_from_source
-
-        if not all(map(is_reachable_from_source, edge_set)):
+        if not all(map(lambda edge: edge in edges_reachable_from_source, edge_set)):
             return None
 
         for edge in source_edge.target.exits:

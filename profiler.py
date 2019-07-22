@@ -3,6 +3,7 @@ from optimize_function import is_optimizable
 import subprocess
 import re
 
+
 def is_leaf_node(node):
 
     return isinstance(node, ast.Name) or isinstance(node, ast.Num) or isinstance(node, ast.Str)

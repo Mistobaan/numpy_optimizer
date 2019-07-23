@@ -2,6 +2,8 @@ axiom_name = 'addition-commutativity'
 
 _a : PEGNode
 _b : PEGNode
+_a.expr_type = 'NumNode'
+_b.expr_type = 'NumNode'
 
 lhs = _a + _b
 rhs = _b + _a
@@ -13,6 +15,7 @@ axiom_name = 'addition-associativity-1'
 _a : PEGNode
 _b : PEGNode
 _c : PEGNode
+
 
 lhs = _a + (_b + _c)
 rhs = _a + _b + _c
@@ -402,7 +405,7 @@ range_obj = range(_up)
 iter_value = _th2(next(iter(range_obj)), next(_th2))
 
 lhs = _eval(_th1(_init, _th1 + iter_value), _pass(not iter_value in range_obj))
-rhs = _init + ((_up - 1) * _up) // 2
+rhs = _init + ((_up - 1) * _up) // 2 if _up > 0 else _init
 
 ###
 
@@ -413,7 +416,7 @@ _up : PEGNode
 _th1 : THETANode
 _th2 : THETANode
 _eval : EvalNode
-_p : PassNode
+_pass : PassNode
 _val : PEGNode
 
 _init.expr_type = 'NumNode'
@@ -421,8 +424,8 @@ _init.expr_type = 'NumNode'
 range_obj = range(_up)
 iter_value = _th2(next(iter(range_obj)), next(_th2))
 
-lhs = _eval(_th1(_init, _th1 + _val), _p(not iter_value in range_obj))
-rhs = _init + _up * _val
+lhs = _eval(_th1(_init, _th1 + _val), _pass(not iter_value in range_obj))
+rhs = _init + _up * _val if _up > 0 else _init
 
 condition_1 = invariant(_val, _eval)
 

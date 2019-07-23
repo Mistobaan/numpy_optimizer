@@ -1,4 +1,4 @@
-from peg_nodes import LeafNode, BinOpNode, THETANode, BoolOpNode, CompareNode, PHINode, NameConstantNode
+from peg_nodes import LeafNode, BinOpNode, THETANode, BoolOpNode, CompareNode, PHINode, NameConstantNode, IfExpNode
 import ast
 import peg_nodes
 
@@ -8,7 +8,7 @@ def is_foldable(node):
     if isinstance(node, THETANode):
         return False
 
-    if isinstance(node, PHINode):
+    if isinstance(node, PHINode) or isinstance(node, IfExpNode):
         return node.cond().evaluable()
 
     return len(node.children) > 0 and all([child.evaluable() for child in node.children])
@@ -69,7 +69,7 @@ def constant_fold(node):
 
         return constant_fold_compare(node)
 
-    elif isinstance(node, PHINode):
+    elif isinstance(node, PHINode) or isinstance(node, IfExpNode):
 
         return constant_fold_phi(node)
 

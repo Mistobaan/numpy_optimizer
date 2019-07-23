@@ -12,7 +12,7 @@ def fill_graph_helper(root, g, visited):
 
     for i in range(len(root.children)):
 
-        if isinstance(root, peg_nodes.PHINode):
+        if isinstance(root, peg_nodes.PHINode) or isinstance(root, peg_nodes.IfExpNode):
             if i == 0:
                 g.edge(str(root.id), str(root.children[i].id), label='cond')
             elif i == 1:

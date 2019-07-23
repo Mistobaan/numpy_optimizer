@@ -5,7 +5,8 @@ from peg_nodes import BinOpNode, CompareNode, NumNode, ListNode, VariableNode, C
 from peg_nodes import StrNode, DictNode, TupleNode, UnaryOpNode, SetNode, FunctionCall, BoolOpNode, GeneratorExpNode
 from peg_nodes import THETANode, PHINode, EvalNode, PassNode, Param, TemporaryNode, ListCompNode, SetCompNode
 from peg_nodes import AttributeNode, SubscriptNode, SliceNode, ExtSliceNode, IndexNode, LambdaNode, NameConstantNode
-from peg_nodes import IdentifierNode, NPArrayNode, SetSubscriptNode
+from peg_nodes import IdentifierNode, NPArrayNode, SetSubscriptNode, IfExpNode
+
 import ast
 import astor
 import peg_nodes
@@ -443,6 +444,15 @@ class PEGBuilder(object):
                 func = self.TE(expression.func, ctx)
                 node = FunctionCall(self.compute_id(), [func] + args)
 
+            node.cost = cost
+
+        elif isinstance(expression, ast.IfExp):
+
+            cond = self.TE(expression.test, ctx)
+            t = self.TE(expression.body, ctx)
+            f = self.TE(expression.orelse, ctx)
+
+            node = IfExpNode(self.compute_id(), [cond, t, f])
             node.cost = cost
 
 

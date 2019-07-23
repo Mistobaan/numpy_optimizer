@@ -1,4 +1,4 @@
-from peg_nodes import PEGNode, BinOpNode, CompareNode, BytesNode, NumNode, ListNode, SetSubscriptNode
+from peg_nodes import PEGNode, BinOpNode, CompareNode, ListNode, IfExpNode
 from peg_nodes import LeafNode, StrNode, DictNode, TupleNode, UnaryOpNode, SetNode, FunctionCall, BoolOpNode
 from peg_nodes import THETANode, PHINode, EvalNode, PassNode, Param, TemporaryNode, IdentifierNode, NPArrayNode
 from peg_nodes import AttributeNode, SubscriptNode, SliceNode, ExtSliceNode, IndexNode, ComprehensionNode, ListCompNode
@@ -645,6 +645,27 @@ class CodeFromPEGGenerator(object):
                 param_node = Param(func_call.id, fresh_var)
 
                 self.peg.replace_node(func_call, param_node)
+
+            if isinstance(root.children[i], IfExpNode):
+
+                if_e = root.children[i]
+                fresh_var = self.create_fresh_var('if_exp')
+                target = ast.Name(id=fresh_var, ctx=ast.Store())
+
+                cond = self.choose_child_leaf_node(if_e.cond())
+                t = self.choose_child_leaf_node(if_e.t())
+                f = self.choose_child_leaf_node(if_e.f())
+
+                if_e_exp = ast.IfExp(test=cond, body=t, orelse=f)
+                if_e_assignement = ast.Assign(targets=[target], value=if_e_exp)
+
+                if not if_e.id in self.cycle_nodes:
+                    self.rhs_assignement_expressions[if_e.id] = if_e_exp
+                else:
+                    sentence.append(if_e_assignement)
+
+                param_node = Param(if_e.id, fresh_var)
+                self.peg.replace_node(if_e, param_node)
 
             if isinstance(root.children[i], CompareNode):
 

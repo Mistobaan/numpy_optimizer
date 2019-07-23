@@ -13,7 +13,6 @@ class PEGNode(object):
         self.loop_variance_indices = set([])
 
 
-
     def compute_expr_type(self):
         return 'unknown'
 
@@ -211,7 +210,7 @@ class PHINode(PEGNode):
         return self.children[2] if len(self.children) > 0 else None
 
     def __str__(self):
-        return 'PHI' + ' (' + str(self.cond().cost) + ')'
+        return 'PHI'
 
     def same(self, other):
 
@@ -781,6 +780,39 @@ class FunctionCall(PEGNode):
             return False
 
         return all([ch.same(oth_ch) for (ch, oth_ch) in zip(self.children, other.children)])
+
+
+class IfExpNode(PEGNode):
+
+    def __init__(self, _id, children=[]):
+        super().__init__(_id)
+        self.children = children
+
+    def cond(self):
+        return self.children[0]
+
+    def t(self):
+        return self.children[1]
+
+    def f(self):
+        return self.children[2]
+
+    def __str__(self):
+        return 'IfExp'
+
+    def same(self, other):
+
+        if self.type_name() != other.type_name():
+            return False
+
+        if str(self) != str(other):
+            return False
+
+        if len(self.children) != len(other.children):
+            return False
+
+        return all([ch.same(oth_ch) for (ch, oth_ch) in zip(self.children, other.children)])
+
 
 
 class LambdaNode(PEGNode):

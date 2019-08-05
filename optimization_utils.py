@@ -101,6 +101,7 @@ def constant_fold_binop(node):
 
     expr = None
 
+
     if left.evaluable() and right.evaluable():
 
         left_val = left.value()

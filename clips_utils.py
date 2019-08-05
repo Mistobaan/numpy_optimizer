@@ -135,8 +135,8 @@ def node_rhs_assertion(node, bindings, theta_node_children_strs):
 
 def clips_node_to_node_info(clips_node):
 
-    pattern_str = r"\(id (.+)\) \(eq-class (.+)\) \(type (.+)\) \(args ?(.+)?\) \(children ?(([^\s()] ?)*)\)"
-    pattern_str += r" \(loop-variance-indices (.+)\) \(loop-depth (.+)\) "
+    pattern_str = r"\(id (.+)\) \(eq-class (.+)\) \(type (.+)\) \(args ?(.+)?\) \(children ?(.+)?\)"
+    pattern_str += r" \(loop-variance-indices ?(.+)?\) \(loop-depth (-?\d+)\) "
     pattern = re.compile(pattern_str)
     search_obj = pattern.search(clips_node)
 
@@ -147,8 +147,8 @@ def clips_node_to_node_info(clips_node):
     eq_class = search_obj.groups()[1]
     type_name = search_obj.groups()[2]
     args = search_obj.groups()[3]
-    children = search_obj.groups()[4].split()
-    loop_depth = search_obj.groups()[7]
+    children = (search_obj.groups()[4] if search_obj.groups()[4] != None else '').split()
+    loop_depth = search_obj.groups()[6]
 
     return [_id, eq_class, type_name, args, loop_depth] + children
 

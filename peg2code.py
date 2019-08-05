@@ -9,6 +9,7 @@ from common_graph_funcs import is_node_in_two_len_cycle, is_node_forloop_iter
 from ast_utils import is_forloop_initializer, get_forloop_iter_obj, get_forloop_var
 from statement_nodes import LoopNode, BranchNode, StmtBranchesCtx, StmtLoopBodyCtx, merge_dicts
 
+from ast_utils import stmt_contains_var, SubstituteVarWithExpression
 
 class CodeFromPEGGenerator(object):
 
@@ -20,8 +21,8 @@ class CodeFromPEGGenerator(object):
         self.processed_evals = []
 
         self.compute_predecessors(peg.root, [])
-        self.cycle_nodes = set([node.id for node in peg.nodes if (is_node_in_two_len_cycle(node) or
-                                len(node.predecessors) > 1) and not is_node_forloop_iter(node)])
+        self.cycle_nodes = set([node.id for node in peg.nodes if is_node_in_two_len_cycle(node)])
+        self.one_predecessor_stmts = []
 
     def get_code(self):
 
@@ -615,12 +616,8 @@ class CodeFromPEGGenerator(object):
                 target = ast.Name(id=fresh_var, ctx=ast.Store())
                 args = [self.choose_child_leaf_node(arg) for arg in operator.children]
                 op_exp = ast.BinOp(left=args[0], op=operator.op, right=args[1])
-                op_assignement = ast.Assign(targets=[target], value=op_exp)
 
-                if not operator.id in self.cycle_nodes:
-                    self.rhs_assignement_expressions[operator.id] = op_exp
-                else:
-                    sentence.append(op_assignement)
+                self.process_stmt(sentence, operator, fresh_var, op_exp)
 
                 param_node = Param(operator.id, fresh_var)
                 self.peg.replace_node(operator, param_node)
@@ -635,12 +632,8 @@ class CodeFromPEGGenerator(object):
                 args = [self.choose_child_leaf_node(arg) for arg in func_call.args()]
 
                 func_call_exp = ast.Call(func=name, args=args, keywords=[])
-                func_assignement = ast.Assign(targets=[target], value=func_call_exp)
 
-                if not func_call.id in self.cycle_nodes:
-                    self.rhs_assignement_expressions[func_call.id] = func_call_exp
-                else:
-                    sentence.append(func_assignement)
+                self.process_stmt(sentence, func_call, fresh_var, func_call_exp)
 
                 param_node = Param(func_call.id, fresh_var)
 
@@ -657,12 +650,7 @@ class CodeFromPEGGenerator(object):
                 f = self.choose_child_leaf_node(if_e.f())
 
                 if_e_exp = ast.IfExp(test=cond, body=t, orelse=f)
-                if_e_assignement = ast.Assign(targets=[target], value=if_e_exp)
-
-                if not if_e.id in self.cycle_nodes:
-                    self.rhs_assignement_expressions[if_e.id] = if_e_exp
-                else:
-                    sentence.append(if_e_assignement)
+                self.process_stmt(sentence, if_e, fresh_var, if_e_exp)
 
                 param_node = Param(if_e.id, fresh_var)
                 self.peg.replace_node(if_e, param_node)
@@ -677,12 +665,8 @@ class CodeFromPEGGenerator(object):
                 tail = [self.choose_child_leaf_node(arg) for arg in compare.tail()]
 
                 cmp_exp = ast.Compare(left=head, ops=compare.ops, comparators=tail)
-                cmp_assignement = ast.Assign(targets=[target], value=cmp_exp)
 
-                if not compare.id in self.cycle_nodes:
-                    self.rhs_assignement_expressions[compare.id] = cmp_exp
-                else:
-                    sentence.append(cmp_assignement)
+                self.process_stmt(sentence, compare, fresh_var, cmp_exp)
 
                 param_node = Param(compare.id, fresh_var)
                 self.peg.replace_node(compare, param_node)
@@ -696,12 +680,8 @@ class CodeFromPEGGenerator(object):
                 values = [self.choose_child_leaf_node(arg) for arg in bool_op_node.children]
 
                 bool_op_exp = ast.BoolOp(op=bool_op_node.op, values=values)
-                bool_op_assignement = ast.Assign(targets=[target], value=bool_op_exp)
 
-                if not bool_op_node.id in self.cycle_nodes:
-                    self.rhs_assignement_expressions[bool_op_node.id] = bool_op_exp
-                else:
-                    sentence.append(bool_op_assignement)
+                self.process_stmt(sentence, bool_op_node, fresh_var, bool_op_exp)
 
                 param_node = Param(bool_op_node.id, fresh_var)
                 self.peg.replace_node(bool_op_node, param_node)
@@ -714,12 +694,8 @@ class CodeFromPEGGenerator(object):
                 operand = self.choose_child_leaf_node(un_op_node.operand())
 
                 un_op_exp = ast.UnaryOp(op=un_op_node.op, operand=operand)
-                un_op_assignement = ast.Assign(targets=[target], value=un_op_exp)
 
-                if not un_op_node.id in self.cycle_nodes:
-                    self.rhs_assignement_expressions[un_op_node.id] = un_op_exp
-                else:
-                    sentence.append(un_op_assignement)
+                self.process_stmt(sentence, un_op_node, fresh_var, un_op_exp)
 
                 param_node = Param(un_op_node.id, fresh_var)
                 self.peg.replace_node(un_op_node, param_node)
@@ -733,12 +709,8 @@ class CodeFromPEGGenerator(object):
                 elts = [self.choose_child_leaf_node(elem) for elem in list_node.children]
 
                 list_exp = ast.List(elts=elts, ctx=ast.Load())
-                list_assignement = ast.Assign(targets=[target], value=list_exp)
 
-                if not list_node.id in self.cycle_nodes:
-                    self.rhs_assignement_expressions[list_node.id] = list_exp
-                else:
-                    sentence.append(list_assignement)
+                self.process_stmt(sentence, list_node, fresh_var, list_exp)
 
                 param_node = Param(list_node.id, fresh_var)
                 self.peg.replace_node(list_node, param_node)
@@ -752,12 +724,8 @@ class CodeFromPEGGenerator(object):
                 elts = [self.choose_child_leaf_node(elem) for elem in tuple_node.children]
 
                 tuple_exp = ast.Tuple(elts=elts, ctx=ast.Load())
-                tuple_assignement = ast.Assign(targets=[target], value=tuple_exp)
 
-                if not tuple_node.id in self.cycle_nodes:
-                    self.rhs_assignement_expressions[tuple_node.id] = tuple_exp
-                else:
-                    sentence.append(tuple_assignement)
+                self.process_stmt(sentence, tuple_node, fresh_var, tuple_exp)
 
                 param_node = Param(tuple_node.id, fresh_var)
                 self.peg.replace_node(tuple_node, param_node)
@@ -771,12 +739,8 @@ class CodeFromPEGGenerator(object):
                 elts = [self.choose_child_leaf_node(elem) for elem in set_node.children]
 
                 set_exp = ast.Set(elts=elts, ctx=ast.Load())
-                set_assignement = ast.Assign(targets=[target], value=set_exp)
 
-                if not set_node.id in self.cycle_nodes:
-                    self.rhs_assignement_expressions[set_node.id] = set_exp
-                else:
-                    sentence.append(set_assignement)
+                self.process_stmt(sentence, set_node, fresh_var, set_exp)
 
                 param_node = Param(set_node.id, fresh_var)
                 self.peg.replace_node(set_node, param_node)
@@ -792,13 +756,8 @@ class CodeFromPEGGenerator(object):
                 values = [self.choose_child_leaf_node(v) for v in dict_node.values()]
 
                 dict_exp = ast.Dict(keys=keys, values=values, ctx=ast.Load())
-                dict_assignement = ast.Assign(targets=[target], value=dict_exp)
 
-                if not dict_node.id in self.cycle_nodes:
-                    self.rhs_assignement_expressions[dict_node.id] = dict_exp
-
-                else:
-                    sentence.append(dict_assignement)
+                self.process_stmt(sentence, dict_node, fresh_var, dict_exp)
 
                 param_node = Param(dict_node.id, fresh_var)
                 self.peg.replace_node(dict_node, param_node)
@@ -827,13 +786,8 @@ class CodeFromPEGGenerator(object):
                 slice = self.choose_child_leaf_node(subs_node.slice())
 
                 subs_exp = ast.Subscript(value=value, slice=slice, ctx=ast.Load())
-                subs_assignement = ast.Assign(targets=[target], value=subs_exp)
 
-                if not subs_node.id in self.cycle_nodes:
-                    self.rhs_assignement_expressions[subs_node.id] = subs_exp
-
-                else:
-                    sentence.append(subs_assignement)
+                self.process_stmt(sentence, subs_node, fresh_var, subs_exp)
 
                 param_node = Param(subs_node.id, fresh_var)
                 self.peg.replace_node(subs_node, param_node)
@@ -891,13 +845,7 @@ class CodeFromPEGGenerator(object):
                 ndarr_attr = ast.Attribute(value=ast.Name(id='np', ctx=ast.Load()), attr='array')
                 ndarr_exp = ast.Call(func=ndarr_attr, args=[lists], keywords=[])
 
-                ndarr_assignement = ast.Assign(targets=[target], value=ndarr_exp)
-
-                if not ndarr_node.id in self.cycle_nodes:
-                    self.rhs_assignement_expressions[ndarr_node.id] = ndarr_exp
-
-                else:
-                    sentence.append(ndarr_assignement)
+                self.process_stmt(sentence, ndarr_node, fresh_var, ndarr_exp)
 
                 param_node = Param(ndarr_node.id, fresh_var)
                 self.peg.replace_node(ndarr_node, param_node)
@@ -927,12 +875,8 @@ class CodeFromPEGGenerator(object):
                 generators = [self.choose_child_leaf_node(gen) for gen in lcomp_node.generators()]
 
                 lcomp_exp = ast.ListComp(elt=elt, generators=generators)
-                lcomp_assignement = ast.Assign(targets=[target], value=lcomp_exp)
 
-                if not lcomp_node.id in self.cycle_nodes:
-                    self.rhs_assignement_expressions[lcomp_node.id] = lcomp_exp
-                else:
-                    sentence.append(lcomp_assignement)
+                self.process_stmt(sentence, lcomp_node, fresh_var, lcomp_exp)
 
                 param_node = Param(lcomp_node.id, fresh_var)
                 self.peg.replace_node(lcomp_node, param_node)
@@ -945,3 +889,33 @@ class CodeFromPEGGenerator(object):
         else:
             return child.token
 
+
+
+
+    def process_stmt(self, sentence, node, var, expression):
+
+        if len(sentence) > 0:
+
+            last_stmt = sentence[-1]
+            last_stmt_target = last_stmt.targets[0]
+            last_stmt_val = last_stmt.value
+
+            if last_stmt in self.one_predecessor_stmts and stmt_contains_var(expression, last_stmt_target.id):
+                expression = SubstituteVarWithExpression(last_stmt_target.id, last_stmt_val).visit(expression)
+
+                sentence.remove(last_stmt)
+
+        target = ast.Name(id=var, ctx=ast.Store())
+        assignement = ast.Assign(targets=[target], value=expression)
+
+        print(astor.dump_tree(assignement))
+
+        if not node.id in self.cycle_nodes and len(node.predecessors) <= 1:
+            self.rhs_assignement_expressions[node.id] = expression
+
+        elif len(node.predecessors) <= 1:
+            self.one_predecessor_stmts.append(assignement)
+            sentence.append(assignement)
+
+        else:
+            sentence.append(assignement)

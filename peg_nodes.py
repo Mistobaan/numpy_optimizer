@@ -40,7 +40,7 @@ class LeafNode(PEGNode):
         super().__init__(_id)
         self.token = token
         self.expr_type = type(self).__name__
-        self.cost = 0
+        self.cost = 1
 
     def type_name(self):
         return super().type_name() + str(self)
@@ -270,6 +270,10 @@ class NumNode(LeafNode):
         return str(self.value()) if self.token != None else '?'
 
 
+    def compute_expr_type(self):
+        return 'NumNode'
+
+
 class StrNode(LeafNode):
 
     def __init__(self, _id, token=None):
@@ -444,7 +448,6 @@ class AttributeNode(PEGNode):
         super().__init__(_id)
         self.attr = attr
         self.children = value_child
-        self.cost = 3
 
     def value(self):
         return self.children[0]

@@ -503,3 +503,14 @@ _b : PEGNode
 
 lhs = np.sin(_a) * np.cos(_b) + np.cos(_a) * np.sin(_b)
 rhs = np.sin(_a + _b)
+
+
+###
+
+axiom_name = 'numeric-equal-reflexivity'
+
+_a : PEGNode
+_a.expr_type = 'NumNode'
+
+lhs = _a == _a
+rhs = True

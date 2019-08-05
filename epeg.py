@@ -58,7 +58,6 @@ class EPEG(object):
         if not eq_class in self.classes.keys():
             self.classes[eq_class] = [node]
 
-
         else:
             if not node in self.classes[eq_class]:
                 self.classes[eq_class].append(node)
@@ -163,6 +162,7 @@ class EPEG(object):
             clp_node = clips_node_to_node_info(str(instance))
 
             if clp_node != None:
+                print(clp_node)
                 _id, eq_class, type_name, args, loop_depth = clp_node[:5]
 
                 eq_class = map_to_eq_class(eq_class, equalities)
@@ -173,20 +173,12 @@ class EPEG(object):
                         self.classes[self.nodes[int(_id)].eq_class].remove(self.nodes[int(_id)])
                         self.nodes[int(_id)].eq_class = eq_class
 
-                        if eq_class in self.classes.keys() and not self.nodes[int(_id)] in self.classes[eq_class]:
-                            self.classes[eq_class].append(self.nodes[int(_id)])
-                        else:
-                            self.classes[eq_class] = [self.nodes[int(_id)]]
+                        self.add_node_to_eq_class(self.nodes[int(_id)], eq_class)
                     continue
 
                 _id = -int(_id)
                 self.nodes[_id] = node_from_type_info(_id, eq_class, type_name, args, loop_depth)
-
-                if eq_class not in self.classes.keys():
-                    self.classes[eq_class] = [self.nodes[_id]]
-                else:
-                    if not self.nodes[_id] in self.classes[eq_class]:
-                        self.classes[eq_class].append(self.nodes[_id])
+                self.add_node_to_eq_class(self.nodes[_id], eq_class)
 
         for instance in env.instances():
 
@@ -219,8 +211,8 @@ class EPEG(object):
                 inlined_nodes += rhs_ids
 
             if axiom_name in ['constant-step-loop-addition', 'determinant-of-inverse']:
-              #  predict_nodes_cost(lhs_ids, rhs_ids, axiom_name, self, inlined_nodes)
-                pass
+                predict_nodes_cost(lhs_ids, rhs_ids, axiom_name, self, inlined_nodes)
+
             else:
 
                 left_root_id = abs(lhs_ids[0])
@@ -235,6 +227,7 @@ class EPEG(object):
                 if left_root.type_name() == right_root.type_name():
                     if set([ch.eq_class for ch in left_root.children]) == set([ch.eq_class for ch in right_root.children]):
                         right_root.cost = left_root.cost
+
 
 
 def add_equality(pair, equalities):

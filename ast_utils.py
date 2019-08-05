@@ -45,3 +45,38 @@ def create_original_and_tmp_assignements(var, expression):
     tmp = ast.Assign(targets=[tmp_var], value=target)
 
     return original, tmp
+
+
+class SubstituteVarWithExpression(ast.NodeTransformer):
+
+    def __init__(self, var, expression):
+        self.var = var
+        self.expression = expression
+
+    def visit_Name(self, node):
+
+        if node.id != self.var:
+            return node
+
+        return self.expression
+
+
+def stmt_contains_var(stmt, var):
+
+    if isinstance(stmt, ast.For) or isinstance(stmt, ast.While):
+        expression = stmt
+
+    elif isinstance(stmt, ast.If):
+        expression = stmt.test
+
+    elif isinstance(stmt, ast.Assign) or isinstance(stmt, ast.Return):
+        expression = stmt.value
+
+    else:
+        expression = stmt
+
+    for node in ast.walk(expression):
+        if isinstance(node, ast.Name) and node.id == var:
+            return True
+
+    return False
